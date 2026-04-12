@@ -5,7 +5,9 @@
  *   const { connect, disconnect } = useRoomSocket({
  *     onUpdate(room) { ... },   // 收到房间数据推送
  *     onError(err)  { ... },    // 连接失败 / 被拒绝
- *     onPaused()    { ... }     // 收到 room_paused 广播
+ *     onPaused(room) { ... },   // 收到 room_paused 广播（保持连接）
+ *     onResumed(room){ ... },   // 收到 room_resumed 广播
+ *     onEnded()     { ... }     // 收到 room_ended 广播
  *   })
  *   connect(roomId, token)
  *   disconnect()
@@ -16,7 +18,7 @@ function buildWsUrl(roomId, token) {
   return `${proto}://${location.host}/ws?room=${encodeURIComponent(roomId)}&token=${encodeURIComponent(token)}`
 }
 
-export function useRoomSocket({ onUpdate, onError, onPaused } = {}) {
+export function useRoomSocket({ onUpdate, onError, onPaused, onResumed, onEnded } = {}) {
   let ws = null
   let reconnectTimer = null
   let currentRoomId = null
@@ -66,10 +68,16 @@ export function useRoomSocket({ onUpdate, onError, onPaused } = {}) {
         if (msg.type === 'room_update' && typeof onUpdate === 'function') {
           onUpdate(msg.room)
         } else if (msg.type === 'room_paused') {
-          // 游戏暂停：停止重连，通知上层
+          // 游戏暂停：保持连接，通知上层显示暂停覆盖层
+          if (typeof onPaused === 'function') onPaused(msg.room)
+        } else if (msg.type === 'room_resumed') {
+          // 游戏恢复：通知上层取消暂停覆盖层
+          if (typeof onResumed === 'function') onResumed(msg.room)
+        } else if (msg.type === 'room_ended') {
+          // 游戏结束：停止重连，通知上层
           destroyed = true
           clearTimeout(reconnectTimer)
-          if (typeof onPaused === 'function') onPaused()
+          if (typeof onEnded === 'function') onEnded()
         }
       } catch {}
     }
@@ -79,12 +87,12 @@ export function useRoomSocket({ onUpdate, onError, onPaused } = {}) {
       if (destroyed) return
 
       // 被服务端主动拒绝（4001 / 4003 / 4004）不重连
-      // 4100 = room_paused，也不重连
+      // 4101 = room_ended，也不重连
       if (event.code >= 4000 && event.code < 4200) {
-        if (event.code === 4100) {
-          // room_paused 关闭码，触发 onPaused（处理消息可能未来得及送达的情况）
+        if (event.code === 4101) {
+          // room_ended 关闭码，触发 onEnded
           destroyed = true
-          if (typeof onPaused === 'function') onPaused()
+          if (typeof onEnded === 'function') onEnded()
           return
         }
         if (typeof onError === 'function') onError(event.reason || 'ws_rejected')

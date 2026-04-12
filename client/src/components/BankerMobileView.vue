@@ -14,12 +14,26 @@
           <div class="mb-kpi-val">{{ room.players.length }}</div>
         </div>
         <div class="mb-kpi">
-          <div class="mb-kpi-label">总金额</div>
+          <div class="mb-kpi-label">总余额</div>
           <div class="mb-kpi-val" style="color:#34d399;">¥{{ fmt(totalBalance) }}</div>
         </div>
         <div class="mb-kpi">
-          <div class="mb-kpi-label">银行资金</div>
+          <div class="mb-kpi-label">
+            银行资金
+            <span class="mb-interest-rate">{{ room.config.interestRate ?? 1.5 }}%</span>
+          </div>
           <div class="mb-kpi-val" :style="{ color: (room.config.bankBalance ?? 0) >= 0 ? '#34d399' : '#f87171' }">¥{{ fmt(room.config.bankBalance ?? 0) }}</div>
+          <div class="mb-interest-countdown" :class="mbInterestCountdownSecs <= 60 ? 'mb-interest-countdown--soon' : ''">{{ mbInterestCountdownLabel }}</div>
+        </div>
+        <div class="mb-kpi">
+          <div class="mb-kpi-label">总存款</div>
+          <div class="mb-kpi-val" style="color:#2dd4bf;">¥{{ fmt(totalDeposits) }}</div>
+          <div class="mb-kpi-sub">{{ activeDepositCount }} 笔</div>
+        </div>
+        <div class="mb-kpi">
+          <div class="mb-kpi-label">总贷款</div>
+          <div class="mb-kpi-val" style="color:#fb923c;">¥{{ fmt(totalLoans) }}</div>
+          <div class="mb-kpi-sub">{{ activeLoanCount }} 笔</div>
         </div>
       </div>
     </header>
@@ -40,13 +54,22 @@
         :key="p.id"
       >
         <div class="mb-pc-top">
-          <span class="mb-pc-name">{{ p.name }}</span>
-          <span class="mb-pc-delta" :class="delta(p) > 0 ? 'pos' : delta(p) < 0 ? 'neg' : 'neu'">
-            {{ delta(p) > 0 ? '+' : '' }}{{ delta(p) !== 0 ? fmt(delta(p)) : '持平' }}
-          </span>
-        </div>
-        <div class="mb-pc-balance">¥{{ fmt(p.balance) }}</div>
-        <div class="mb-pc-actions">
+            <span class="mb-pc-name">{{ p.name }}</span>
+            <span class="mb-pc-delta" :class="delta(p) > 0 ? 'pos' : delta(p) < 0 ? 'neg' : 'neu'">
+              {{ delta(p) > 0 ? '+' : '' }}{{ delta(p) !== 0 ? fmt(delta(p)) : '持平' }}
+            </span>
+          </div>
+          <div class="mb-pc-balance">¥{{ fmt(p.balance) }}</div>
+          <div class="mb-pc-assets-row">
+            <span class="mb-pc-assets-label">总资产</span>
+            <span class="mb-pc-assets-val">¥{{ fmt(totalAssets(p)) }}</span>
+            <span class="mb-pc-assets-breakdown" v-if="getPropertyValue(p.id) > 0">（地产 ¥{{ fmt(getPropertyValue(p.id)) }}）</span>
+          </div>
+          <div class="mb-pc-prop-row">
+            <span class="mb-pc-prop-label">持有房产</span>
+            <span class="mb-pc-prop-val">{{ getPropertyCount(p.id) }} 块</span>
+          </div>
+          <div class="mb-pc-actions">
           <button class="green-btn mb-action-btn" @click="openAction('bank-add', p.id)">＋ 发钱</button>
           <button class="red-btn mb-action-btn" @click="openAction('bank-sub', p.id)">－ 扣钱</button>
         </div>
@@ -111,9 +134,9 @@
         <div class="mb-ctrl-item">
           <div>
             <div class="mb-ctrl-title">暂停游戏</div>
-            <div class="mb-ctrl-desc">所有玩家将断开连接并返回主页</div>
+            <div class="mb-ctrl-desc">所有玩家界面显示暂停，利息计时冻结</div>
           </div>
-          <button class="tb-btn pause-btn" @click="pauseGame">暂停</button>
+          <button class="tb-btn pause-btn" @click="isPaused ? resumeGame() : pauseGame()">{{ isPaused ? '恢复' : '暂停' }}</button>
         </div>
         <div class="mb-ctrl-item">
           <div>
@@ -165,6 +188,16 @@
       </div>
     </div>
 
+    <!-- 暂停覆盖层 -->
+    <div v-if="isPaused" class="pause-overlay">
+      <div class="pause-overlay-content">
+        <div class="pause-icon">⏸</div>
+        <h2 class="pause-title">游戏已暂停</h2>
+        <p class="pause-desc">利息计时已冻结，恢复游戏后继续</p>
+        <button class="pause-resume-btn" @click="resumeGame">恢复游戏</button>
+      </div>
+    </div>
+
   </div>
 </template>
 
@@ -176,6 +209,9 @@ import { fmt, apiWithToken } from '../composables/api.js'
 
 const props = defineProps({ room: Object, myToken: String })
 const emit = defineEmits(['room-updated', 'end-game'])
+
+// ─── 暂停状态 ─────────────────────────────────────────────────────────────────
+const isPaused = computed(() => (props.room?.status || 'active') === 'paused')
 
 const tab = ref('players')
 
@@ -201,8 +237,52 @@ function delta(player) {
   return player.balance - props.room.config.startingMoney
 }
 
+function getPropertyValue(playerId) {
+  return (props.room.properties || [])
+    .filter(p => p.player_id === playerId)
+    .reduce((s, p) => s + Number(p.price || 0) + Number(p.build_cost || 0), 0)
+}
+
+function getPropertyCount(playerId) {
+  return (props.room.properties || []).filter(p => p.player_id === playerId).length
+}
+
+function getPlayerDepositTotal(playerId) {
+  return (props.room.deposits || [])
+    .filter(d => d.player_id === playerId && d.status === 'active')
+    .reduce((s, d) => s + Number(d.amount || 0), 0)
+}
+
+function getPlayerDebt(playerId) {
+  return (props.room.loans || [])
+    .filter(l => l.player_id === playerId && l.status === 'active')
+    .reduce((s, l) => s + Number(l.remaining || 0), 0)
+}
+
+function totalAssets(player) {
+  return Number(player.balance || 0) + getPropertyValue(player.id) + getPlayerDepositTotal(player.id) - getPlayerDebt(player.id)
+}
+
 const totalBalance = computed(() =>
   props.room.players.reduce((s, p) => s + Number(p.balance || 0), 0)
+)
+
+const totalNetAssets = computed(() =>
+  props.room.players.reduce((s, p) => s + totalAssets(p), 0)
+)
+
+// ─── 存款 / 贷款汇总 ──────────────────────────────────────────────────────────
+const totalDeposits = computed(() =>
+  (props.room.deposits || []).filter(d => d.status === 'active').reduce((s, d) => s + Number(d.amount || 0), 0)
+)
+const totalLoans = computed(() =>
+  (props.room.loans || []).filter(l => l.status === 'active').reduce((s, l) => s + Number(l.remaining || 0), 0)
+)
+const activeDepositCount = computed(() =>
+  (props.room.deposits || []).filter(d => d.status === 'active').length
+)
+const activeLoanCount = computed(() =>
+  (props.room.loans || []).filter(l => l.status === 'active').length
 )
 
 // ─── 游戏计时器 ───────────────────────────────────────────────────────────────
@@ -220,6 +300,30 @@ const formattedTime = computed(() => {
   if (h > 0) {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
   }
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+})
+
+// ─── 利息倒计时 ───────────────────────────────────────────────────────────────
+const mbInterestCountdownSecs = computed(() => {
+  // 暂停时冻结倒计时，根据 pausedAt 计算暂停时刻的剩余秒数
+  if (isPaused.value) {
+    const intervalMin = props.room.config.interestIntervalMin ?? 10
+    const lastAt = props.room.config.lastInterestAt ?? props.room.createdAt
+    const pausedAt = props.room.config.pausedAt ?? Date.now()
+    const nextAt = lastAt + intervalMin * 60 * 1000
+    return Math.max(0, Math.round((nextAt - pausedAt) / 1000))
+  }
+  void elapsedSeconds.value
+  const intervalMin = props.room.config.interestIntervalMin ?? 10
+  const lastAt = props.room.config.lastInterestAt ?? props.room.createdAt
+  const nextAt = lastAt + intervalMin * 60 * 1000
+  return Math.max(0, Math.round((nextAt - Date.now()) / 1000))
+})
+
+const mbInterestCountdownLabel = computed(() => {
+  const secs = mbInterestCountdownSecs.value
+  const m = Math.floor(secs / 60)
+  const s = secs % 60
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 })
 
@@ -309,15 +413,23 @@ async function resetRoom() {
 }
 
 async function pauseGame() {
-  if (!confirm('确认暂停游戏？所有玩家将断开连接并返回主页。')) return
+  if (!confirm('确认暂停游戏？所有玩家界面将显示暂停状态，利息计时将冻结。')) return
   try {
     await apiWithToken(`/api/rooms/${props.room.id}/pause`, props.myToken, { method: 'POST', body: {} })
   } catch {}
-  emit('end-game')
 }
 
-function endGame() {
+async function resumeGame() {
+  try {
+    await apiWithToken(`/api/rooms/${props.room.id}/resume`, props.myToken, { method: 'POST', body: {} })
+  } catch (e) { alert('恢复失败：' + e.message) }
+}
+
+async function endGame() {
   if (!confirm('确认结束本局游戏并返回首页？')) return
+  try {
+    await apiWithToken(`/api/rooms/${props.room.id}/end-game`, props.myToken, { method: 'POST', body: {} })
+  } catch {}
   emit('end-game')
 }
 </script>
@@ -376,7 +488,7 @@ function endGame() {
 
 .mb-kpi-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 10px;
 }
 
@@ -392,12 +504,51 @@ function endGame() {
   font-size: 11px;
   color: #a7b0cf;
   margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.mb-interest-rate {
+  font-size: 10px;
+  font-weight: 700;
+  color: #34d399;
+  background: rgba(52,211,153,.15);
+  border: 1px solid rgba(52,211,153,.3);
+  border-radius: 5px;
+  padding: 0 4px;
+  line-height: 1.5;
 }
 
 .mb-kpi-val {
   font-size: 18px;
   font-weight: 800;
   color: #eef2ff;
+}
+
+.mb-interest-countdown {
+  font-size: 10px;
+  color: #a7b0cf;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+  letter-spacing: .03em;
+}
+
+.mb-kpi-sub {
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.mb-interest-countdown--soon {
+  color: #f87171;
+  animation: pulse-countdown-mb .8s ease-in-out infinite;
+}
+
+@keyframes pulse-countdown-mb {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .4; }
 }
 
 /* ══ Tab ══ */
@@ -471,7 +622,51 @@ function endGame() {
   font-weight: 900;
   letter-spacing: -.03em;
   color: #eef2ff;
-  margin: 8px 0 10px;
+  margin: 8px 0 4px;
+}
+
+.mb-pc-assets-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.mb-pc-assets-label {
+  font-size: 11px;
+  color: #a7b0cf;
+  font-weight: 600;
+}
+
+.mb-pc-assets-val {
+  font-size: 13px;
+  font-weight: 700;
+  color: #a78bfa;
+}
+
+.mb-pc-assets-breakdown {
+  font-size: 11px;
+  color: #6d5fb5;
+}
+
+.mb-pc-prop-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 10px;
+  margin-top: -6px;
+}
+
+.mb-pc-prop-label {
+  font-size: 11px;
+  color: #a7b0cf;
+  font-weight: 600;
+}
+
+.mb-pc-prop-val {
+  font-size: 13px;
+  font-weight: 700;
+  color: #fbbf24;
 }
 
 .mb-pc-actions {
@@ -682,5 +877,62 @@ function endGame() {
 .mb-go-input:focus {
   border-color: rgba(16,185,129,.5);
   background: rgba(16,185,129,.08);
+}
+
+/* ── 暂停覆盖层 ── */
+.pause-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(15, 23, 42, 0.88);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: pause-fade-in 0.3s ease;
+}
+@keyframes pause-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.pause-overlay-content {
+  text-align: center;
+  color: #e2e8f0;
+  padding: 40px;
+}
+.pause-icon {
+  font-size: 64px;
+  margin-bottom: 16px;
+  animation: pause-pulse 2s ease-in-out infinite;
+}
+@keyframes pause-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.95); }
+}
+.pause-title {
+  font-size: 28px;
+  font-weight: 800;
+  margin: 0 0 12px;
+  color: #f1f5f9;
+}
+.pause-desc {
+  font-size: 15px;
+  color: #94a3b8;
+  margin: 0 0 28px;
+}
+.pause-resume-btn {
+  padding: 12px 40px;
+  font-size: 16px;
+  font-weight: 700;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.pause-resume-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
 }
 </style>

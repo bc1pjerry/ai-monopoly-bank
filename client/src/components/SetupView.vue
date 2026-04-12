@@ -30,13 +30,25 @@
       <div v-else class="history-list">
         <div class="history-item" v-for="r in historyRooms" :key="r.id">
           <div class="history-info">
-            <div class="history-id">房间 {{ r.id }}</div>
+            <div class="history-id">
+              房间 {{ r.id }}
+              <span v-if="r.status === 'paused'" class="status-badge paused">已暂停</span>
+              <span v-else-if="r.status === 'ended'" class="status-badge ended">已结束</span>
+              <span v-else class="status-badge active">进行中</span>
+            </div>
             <div class="history-meta">
               {{ r.config.playerCount }} 人局 · 起始 ¥{{ fmt(r.config.startingMoney) }} · 过起点 ¥{{ fmt(r.config.goSalary ?? 200) }}
               · 最后活动 {{ timeAgo(r.updatedAt) }}
             </div>
           </div>
           <div class="history-actions">
+            <button
+              v-if="r.status !== 'ended'"
+              :class="r.status === 'paused' ? 'resume-btn mini' : 'enter-btn mini'"
+              @click="handleResume(r.id)"
+            >
+              {{ r.status === 'paused' ? '恢复游戏' : '进入游戏' }}
+            </button>
             <button
               class="red-btn mini"
               :class="{ 'confirm-delete': confirmDeleteId === r.id }"
@@ -58,7 +70,7 @@
 import { ref, onMounted } from 'vue'
 import { apiFetch, fmt } from '../composables/api.js'
 
-const emit = defineEmits(['created'])
+const emit = defineEmits(['created', 'resume'])
 
 const playerCount = ref(4)
 const startingMoney = ref(1500)
@@ -102,6 +114,19 @@ async function handleDelete(roomId) {
   }
 }
 
+async function handleResume(roomId) {
+  try {
+    const data = await apiFetch(`/api/rooms/${roomId}/resume`, {
+      method: 'POST',
+      body: {}
+    })
+    // data: { roomId, bankerToken, playerTokens, room }
+    emit('resume', data)
+  } catch (e) {
+    alert('恢复失败：' + e.message)
+  }
+}
+
 function timeAgo(ts) {
   const diff = Date.now() - ts
   const m = Math.floor(diff / 60000)
@@ -131,7 +156,7 @@ onMounted(loadHistory)
   padding:12px 14px;
 }
 .history-info { flex:1; min-width:0; }
-.history-id { font-weight:700; font-size:16px; }
+.history-id { font-weight:700; font-size:16px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .history-meta { color:var(--muted); font-size:13px; margin-top:3px; }
 .history-actions { display:flex; gap:8px; align-items:center; flex-shrink:0; }
 .confirm-delete {
@@ -140,4 +165,56 @@ onMounted(loadHistory)
   color: #fff !important;
   font-weight:700;
 }
+.status-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 20px;
+  vertical-align: middle;
+}
+.status-badge.paused {
+  background: rgba(234, 179, 8, 0.2);
+  color: #eab308;
+  border: 1px solid rgba(234, 179, 8, 0.4);
+}
+.status-badge.ended {
+  background: rgba(107, 114, 128, 0.2);
+  color: #9ca3af;
+  border: 1px solid rgba(107, 114, 128, 0.4);
+}
+.status-badge.active {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+}
+.resume-btn {
+  background: rgba(234, 179, 8, 0.2);
+  color: #eab308;
+  border: 1px solid rgba(234, 179, 8, 0.5);
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.resume-btn:hover {
+  background: rgba(234, 179, 8, 0.35);
+}
+.enter-btn {
+  background: rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.5);
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.enter-btn:hover {
+  background: rgba(34, 197, 94, 0.35);
+}
+.field { display:flex; flex-direction:column; gap:6px; margin-bottom:12px; }
+.field label { font-size:13px; color:var(--muted); }
+.field input { padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:rgba(255,255,255,.05); color:inherit; font-size:14px; }
 </style>

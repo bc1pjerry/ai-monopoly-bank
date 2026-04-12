@@ -1,7 +1,7 @@
 <template>
   <div :class="view === 'banker' || view === 'banker-mobile' ? 'wrap-full' : 'wrap'">
     <!-- 建房视图 -->
-    <SetupView v-if="view === 'setup'" @created="onRoomCreated" />
+    <SetupView v-if="view === 'setup'" @created="onRoomCreated" @resume="onRoomResumed" />
 
     <!-- 庄家 PC Dashboard 视图 -->
     <BankerView
@@ -81,7 +81,15 @@ const { connect: wsConnect, disconnect: wsDisconnect } = useRoomSocket({
       view.value = 'invalid'
     }
   },
-  onPaused() {
+  onPaused(updatedRoom) {
+    // 保持当前视图，更新房间数据（status 变为 'paused'），子组件根据 room.status 显示暂停覆盖层
+    if (updatedRoom) room.value = updatedRoom
+  },
+  onResumed(updatedRoom) {
+    // 恢复游戏，更新房间数据（status 变回 'active'）
+    if (updatedRoom) room.value = updatedRoom
+  },
+  onEnded() {
     onEndGame()
   }
 })
@@ -132,6 +140,18 @@ async function onRoomCreated(data) {
   view.value = 'banker'
   history.replaceState({}, '', `/?room=${encodeURIComponent(data.roomId)}&token=${encodeURIComponent(data.bankerToken)}`)
   shareVisible.value = true
+  wsConnect(data.roomId, data.bankerToken)
+}
+
+async function onRoomResumed(data) {
+  // data = { roomId, bankerToken, playerTokens, room } — same shape as onRoomCreated
+  allTokens.value = { bankerToken: data.bankerToken, playerTokens: data.playerTokens }
+  roomId.value = data.roomId
+  myToken.value = data.bankerToken
+  room.value = data.room
+  myPlayerId.value = null
+  view.value = 'banker'
+  history.replaceState({}, '', `/?room=${encodeURIComponent(data.roomId)}&token=${encodeURIComponent(data.bankerToken)}`)
   wsConnect(data.roomId, data.bankerToken)
 }
 

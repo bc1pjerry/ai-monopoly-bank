@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="log-list">
     <div class="log" v-if="allLogs.length">
       <div class="log-item" v-for="log in allLogs" :key="log.id">
         <!-- 第一行：类型胶囊 -->
@@ -26,14 +26,14 @@
           <span v-if="log.note" class="log-note">· {{ log.note }}</span>
         </div>
       </div>
+
+      <!-- 哨兵元素：滚动进入视口时触发加载 -->
+      <div ref="sentinel" class="sentinel">
+        <span v-if="loading" class="sentinel-tip">加载中...</span>
+        <span v-else-if="!hasMore && allLogs.length > 0" class="sentinel-tip">已显示全部 {{ total }} 条记录</span>
+      </div>
     </div>
     <div class="empty" v-else>还没有流水记录。</div>
-
-    <!-- 哨兵元素：滚动进入视口时触发加载 -->
-    <div ref="sentinel" class="sentinel">
-      <span v-if="loading" class="sentinel-tip">加载中...</span>
-      <span v-else-if="!hasMore && allLogs.length > 0" class="sentinel-tip">已显示全部 {{ total }} 条记录</span>
-    </div>
   </div>
 </template>
 
@@ -122,8 +122,16 @@ function parsedLog(log) {
 </script>
 
 <style scoped>
+.log-list {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 .log {
-  max-height: 520px;
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   display: flex;
   flex-direction: column;
