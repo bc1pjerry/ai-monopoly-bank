@@ -1,0 +1,14 @@
+{
+  "name": "monopoly-bank",
+  "version": "1.0.0",
+  "private": true,
+  "description": "大富翁银行 - 局域网多人游戏",
+  "scripts": {
+    "start": "./start.sh",
+    "stop": "./stop.sh",
+    "dev:server": "node server/server.js",
+    "dev:client": "npm run dev --prefix client",
+    "build": "npm run build --prefix client",
+    "migrate": "node server/migrate.js"
+  }
+}

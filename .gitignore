@@ -1,0 +1,19 @@
+# 环境变量（含敏感信息，不提交）
+.env
+
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+
+# 数据库文件
+data/
+
+# 系统文件
+.DS_Store
+
+# 日志 & PID
+*.log
+*.pid
+server/package-lock.json
