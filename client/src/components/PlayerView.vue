@@ -1,5 +1,12 @@
 <template>
-  <div class="player-root">
+  <div class="player-root" style="padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px));">
+    <!-- 顶部 Toast -->
+    <transition name="toast-slide">
+      <div v-if="showToast" class="top-toast">
+        {{ toastMessage }}
+      </div>
+    </transition>
+
     <!-- 顶部 hero -->
     <div class="hero">
       <div>
@@ -7,8 +14,10 @@
         <p>房间 {{ room.id }} · {{ room.config.playerCount }} 人局</p>
       </div>
       <div class="toolbar">
-        <span class="role-label role-player">{{ me?.name }}</span>
-        <button class="end-btn" @click="endGame">结束游戏</button>
+        <button class="role-label role-player role-profile-btn" @click="startEditName" title="修改名字和头像">
+          <img v-if="me" :src="playerAvatarSrc(me)" :alt="me.name" class="role-player-avatar">
+          <span>{{ me?.name }}</span>
+        </button>
       </div>
     </div>
 
@@ -20,23 +29,6 @@
         <span class="my-assets-label">总资产</span>
         <span class="my-assets-val">¥ {{ fmt(myTotalAssets) }}</span>
         <span class="my-assets-breakdown" v-if="myPropertyValue > 0">（含地产 ¥{{ fmt(myPropertyValue) }}）</span>
-      </div>
-      <div style="display:flex; align-items:center; justify-content:center; gap:10px; margin-top:8px;">
-        <div v-if="!editingName" class="muted name-clickable" @click="startEditName">
-          {{ me?.name }} <span class="edit-icon">✏️</span>
-        </div>
-        <div v-else style="display:flex; align-items:center; gap:6px;">
-          <input
-            ref="nameInput"
-            v-model="newName"
-            class="name-input"
-            maxlength="20"
-            @keyup.enter="submitRename"
-            @keyup.escape="cancelEditName"
-          />
-          <button class="primary" style="padding:4px 12px; font-size:13px;" @click="submitRename">确定</button>
-          <button style="padding:4px 10px; font-size:13px;" @click="cancelEditName">取消</button>
-        </div>
       </div>
     </div>
 
@@ -84,14 +76,23 @@
 
         <!-- 转账面板 -->
         <div v-show="homeTab === 'transfer'" class="card">
-          <h2 style="margin-top:0;">向其他玩家转账</h2>
-          <p class="muted">选择收款人，输入金额后确认。</p>
+          <h2 style="margin-top:0; margin-bottom:14px;">向其他玩家转账</h2>
+          
           <div class="field">
             <label>收款人</label>
-            <select v-model="toPlayerId">
-              <option v-for="p in others" :key="p.id" :value="p.id">{{ p.name }}（¥{{ fmt(p.balance) }}）</option>
-            </select>
+            <div class="transfer-player-grid" :style="{ gridTemplateColumns: transferGridColumns }">
+              <div
+                class="transfer-player-item"
+                v-for="p in others"
+                :key="p.id"
+                @click="toPlayerId = p.id; transferReason = 'manual'; showTransferSheet = true;"
+              >
+                <img :src="playerAvatarSrc(p)" :alt="p.name" class="transfer-player-avatar">
+                <div class="transfer-player-name">{{ p.name }}</div>
+              </div>
+            </div>
           </div>
+          
           <NumPad v-model="transferAmount" :quickAmounts="[50,100,200,500,1000]" style="margin-bottom:12px;" />
           <button class="primary" style="width:100%;" @click="submitTransfer">确认转账</button>
         </div>
@@ -208,20 +209,15 @@
               type="button"
               class="lottery-number-btn"
               :class="{ active: selectedLotteryNumber === number, sold: soldLotteryNumbers.has(number), mine: myLotteryNumberSet.has(number) }"
-              :disabled="soldLotteryNumbers.has(number)"
-              @click="selectedLotteryNumber = number"
+              @click="onLotteryNumberClick(number)"
             >
               <span>{{ number }}</span>
-              <span v-if="soldLotteryNumbers.has(number)" class="lottery-number-ban">🚫</span>
             </button>
           </div>
 
           <div class="lottery-actions-row">
-            <div class="lottery-hint" v-if="lotteryCooldownLabel">冷却中：{{ lotteryCooldownLabel }} 后可再次购票</div>
-            <div class="lottery-hint" v-else-if="myLotteryTickets.length">灰色号码已被买走，你可以继续购买其他号码</div>
-            <div class="lottery-hint" v-else>可选择 1-30 任意号码购票</div>
-            <button class="primary lottery-buy-btn" :disabled="!canBuyLottery" @click="submitLotteryPurchase">
-              {{ `购买 ${selectedLotteryNumber} 号` }}
+            <button class="primary lottery-buy-btn" :disabled="!canBuyLottery" @click="submitLotteryPurchase" style="width: 100%;">
+              {{ lotteryCooldownLabel ? `${lotteryCooldownLabel} 后可再次购买` : `购买 ${selectedLotteryNumber} 号` }}
             </button>
           </div>
 
@@ -302,7 +298,10 @@
             <div class="players">
               <div class="player" :class="{ 'is-me': p.id === myPlayerId }" v-for="p in room.players" :key="p.id">
                 <div class="player-top">
-                  <div class="name">{{ p.name }}</div>
+                  <div class="player-status-head">
+                    <img :src="playerAvatarSrc(p)" :alt="p.name" class="battle-player-avatar">
+                    <div class="name">{{ p.name }}</div>
+                  </div>
                   <span class="me-badge" v-if="p.id === myPlayerId">我</span>
                 </div>
                 <div class="balance">¥ {{ fmt(p.balance) }}</div>
@@ -329,7 +328,7 @@
         <!-- 流水面板 -->
         <div v-show="battleTab === 'logs'">
           <section class="card">
-            <LogList :logs="room.logs" :logsTotal="room.logsTotal" :roomId="room.id" :token="myToken" />
+            <LogList :logs="room.logs" :logsTotal="room.logsTotal" :roomId="room.id" :token="myToken" :myPlayerName="me?.name" />
           </section>
         </div>
       </div><!-- activeMainTab=battle end -->
@@ -486,6 +485,101 @@
               :disabled="!buildTargetProp"
               @click="showBuildPicker = false"
             >确认选择</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 付款原因/转账弹窗 -->
+    <Transition name="sheet">
+      <div v-if="showTransferSheet" class="sheet-overlay" @click.self="showTransferSheet = false">
+        <div class="sheet">
+          <div class="sheet-header">
+            <span class="sheet-title">向 {{ playerNameById(toPlayerId) }} 转账</span>
+            <button class="sheet-close" @click="showTransferSheet = false">✕</button>
+          </div>
+          <div class="sheet-body">
+            <div class="build-picker-list">
+              <div
+                class="build-picker-item"
+                :class="{ active: transferReason === 'manual' }"
+                @click="selectTransferReason('manual'); showTransferSheet = false;"
+              >
+                <div class="build-picker-left">
+                  <div class="build-picker-name">手动输入金额</div>
+                  <div class="build-picker-sub">自行在下方输入转账金额</div>
+                </div>
+                <svg v-if="transferReason === 'manual'" class="build-picker-check" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                </svg>
+              </div>
+
+              <div
+                class="build-picker-item"
+                v-for="prop in transferProperties"
+                :key="prop.id"
+                :class="{ active: transferReason === prop.id }"
+                @click="selectTransferReason(prop.id, prop.mortgaged ? 0 : currentRent(prop)); showTransferSheet = false;"
+              >
+                <div class="build-picker-left">
+                  <div class="build-picker-name" style="display:flex; align-items:center; gap:6px;">
+                    {{ prop.name }}
+                    <span v-if="prop.mortgaged" class="deed-mortgaged-badge">抵押中</span>
+                  </div>
+                  <div class="build-picker-sub">过路费 ({{ currentRentLabel(prop) }})</div>
+                </div>
+                <div class="build-picker-rents">
+                   <div class="build-rent-chip">¥{{ prop.mortgaged ? '0' : fmt(currentRent(prop)) }}</div>
+                </div>
+                <svg v-if="transferReason === prop.id" class="build-picker-check" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 修改名字弹窗 -->
+    <Transition name="sheet">
+      <div v-if="showRenameSheet" class="sheet-overlay" @click.self="showRenameSheet = false">
+        <div class="sheet">
+          <div class="sheet-header">
+            <span class="sheet-title">修改名字</span>
+            <button class="sheet-close" @click="showRenameSheet = false">✕</button>
+          </div>
+          <div class="sheet-body rename-sheet-body">
+            <div v-if="me" class="rename-profile-preview">
+              <img :src="renamePreviewAvatarSrc" :alt="renameInput || me.name" class="rename-current-avatar">
+              <div>
+                <div class="rename-preview-title">昵称与头像</div>
+                <div class="rename-preview-sub">修改后会立即同步到当前房间所有玩家</div>
+              </div>
+            </div>
+            <input 
+              ref="renameInputRef"
+              v-model="renameInput" 
+              class="sd-edit-input sd-edit-input--text" 
+              style="width: 100%; text-align: left; padding: 14px 16px; font-size: 16px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: #fff; box-sizing: border-box; outline: none;" 
+              maxlength="20" 
+              placeholder="请输入新名字" 
+              @keyup.enter="submitRenameSheet"
+            />
+            <div class="avatar-picker-grid">
+              <button
+                v-for="avatar in avatarOptions"
+                :key="avatar.id"
+                type="button"
+                class="avatar-picker-btn"
+                :class="{ active: renameAvatarId === avatar.id }"
+                @click="renameAvatarId = avatar.id"
+              >
+                <img :src="avatar.src" :alt="avatar.label" class="avatar-picker-img">
+                <span>{{ avatar.label }}</span>
+              </button>
+            </div>
+            <button class="primary" style="width: 100%; padding: 14px; font-size: 16px; border-radius: 12px; font-weight: 600;" @click="submitRenameSheet">确认修改</button>
           </div>
         </div>
       </div>
@@ -710,7 +804,7 @@
                   :class="{ active: sellToPlayerId === p.id, disabled: hasPendingSaleForCurrentProperty() }"
                   @click="!hasPendingSaleForCurrentProperty() && (sellToPlayerId = p.id)"
                 >
-                  <div class="sell-buyer-avatar">{{ p.name.slice(0,1) }}</div>
+                  <img :src="playerAvatarSrc(p)" :alt="p.name" class="sell-buyer-avatar">
                   <div class="sell-buyer-info">
                     <div class="sell-buyer-name">{{ p.name }}</div>
                     <div class="sell-buyer-balance">
@@ -914,9 +1008,10 @@ import BalanceChart from './BalanceChart.vue'
 import NumPad from './NumPad.vue'
 import DeedOcrModal from './DeedOcrModal.vue'
 import { fmt, apiWithToken } from '../composables/api.js'
+import { avatarOptions, avatarPath, normalizeAvatarId } from '../composables/avatarCatalog.js'
 
 const props = defineProps({ room: Object, myToken: String, myPlayerId: String })
-const emit = defineEmits(['room-updated', 'end-game'])
+const emit = defineEmits(['room-updated'])
 
 // ─── 暂停状态 ─────────────────────────────────────────────────────────────────
 const isPaused = computed(() => (props.room?.status || 'active') === 'paused')
@@ -946,6 +1041,15 @@ function onTransferTouchEnd(e) {
 
 const me = computed(() => props.room.players.find(p => p.id === props.myPlayerId))
 const others = computed(() => props.room.players.filter(p => p.id !== props.myPlayerId))
+
+function playerAvatarId(player, fallback = 1) {
+  return normalizeAvatarId(player?.avatar_id, fallback)
+}
+
+function playerAvatarSrc(player) {
+  if (player?.avatar_url) return player.avatar_url
+  return avatarPath(playerAvatarId(player))
+}
 
 const nowTick = ref(Date.now())
 let lotteryTimer = null
@@ -1018,6 +1122,35 @@ const canBuyLottery = computed(() =>
   && !soldLotteryNumbers.value.has(selectedLotteryNumber.value)
 )
 
+const showToast = ref(false)
+const toastMessage = ref('')
+let toastTimer = null
+
+function showTopToast(msg) {
+  toastMessage.value = msg
+  showToast.value = true
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => {
+    showToast.value = false
+  }, 2500)
+}
+
+function onLotteryNumberClick(number) {
+  if (soldLotteryNumbers.value.has(number)) {
+    const ticket = (lottery.value.tickets || []).find(t => t.number === number)
+    if (ticket) {
+      const player = props.room.players.find(p => p.id === ticket.playerId)
+      if (player) {
+        showTopToast(`该号码已被 ${player.name} 买走`)
+      } else {
+        showTopToast(`该号码已被买走`)
+      }
+    }
+    return
+  }
+  selectedLotteryNumber.value = number
+}
+
 // 获取玩家的资产
 function getPlayerProperties(playerId) {
   return (props.room.properties || []).filter(p => p.player_id === playerId)
@@ -1073,8 +1206,10 @@ function currentRentLabel(prop) {
 
 const deedDetailProp = ref(null)
 const showBuildPicker = ref(false)
+const showTransferSheet = ref(false)
+const showRenameSheet = ref(false)
 
-const isSheetOpen = computed(() => Boolean(showBuildPicker.value || deedDetailProp.value))
+const isSheetOpen = computed(() => Boolean(showBuildPicker.value || deedDetailProp.value || showTransferSheet.value || showRenameSheet.value))
 
 let previousBodyOverflow = ''
 let previousBodyTouchAction = ''
@@ -1282,9 +1417,33 @@ async function respondPropertySale(sale, accept) {
   }
 }
 
-const toPlayerId = ref(others.value[0]?.id || '')
+const toPlayerId = ref('')
 const transferAmount = ref(null)
 const fineAmount = ref(null)
+
+const transferReason = ref('manual')
+
+const transferGridColumns = computed(() => {
+  const count = others.value.length;
+  // If there are exactly 2 or 4 other players, make it a 2-column grid.
+  if (count === 2 || count === 4) {
+    return 'repeat(2, 1fr)';
+  }
+  // Otherwise, default to a 3-column grid (handles 3, 5, 6, etc).
+  return 'repeat(3, 1fr)';
+})
+
+const transferProperties = computed(() => {
+  if (!toPlayerId.value) return []
+  return getPlayerProperties(toPlayerId.value)
+})
+
+function selectTransferReason(reason, rentAmount = 0) {
+  transferReason.value = reason
+  if (reason !== 'manual') {
+    transferAmount.value = Number(rentAmount) || 0
+  }
+}
 
 // ─── 抵押 / 赎回 ──────────────────────────────────────────────────────────────
 const mortgageLoading = ref(false)
@@ -1468,32 +1627,43 @@ function onDeedConfirmed(deed) {
 }
 
 // ─── 改名 ─────────────────────────────────────────────────────────────────────
-const editingName = ref(false)
-const newName = ref('')
-const nameInput = ref(null)
+const renameInput = ref('')
+const renameInputRef = ref(null)
+const renameAvatarId = ref(1)
+const renamePreviewAvatarSrc = computed(() => avatarPath(renameAvatarId.value))
 
-function startEditName() {
-  newName.value = me.value?.name || ''
-  editingName.value = true
-  nextTick(() => nameInput.value?.focus())
+async function startEditName() {
+  renameInput.value = me.value?.name || ''
+  renameAvatarId.value = playerAvatarId(me.value)
+  showRenameSheet.value = true
+  nextTick(() => {
+    renameInputRef.value?.focus()
+  })
 }
 
-function cancelEditName() {
-  editingName.value = false
-}
-
-async function submitRename() {
-  const trimmed = newName.value.trim()
-  if (!trimmed) return alert('名字不能为空')
-  if (trimmed === me.value?.name) { editingName.value = false; return }
+async function submitRenameSheet() {
+  const currentName = me.value?.name || ''
+  const currentAvatarId = playerAvatarId(me.value)
+  const trimmed = renameInput.value.trim()
+  if (!trimmed) {
+    alert('名字不能为空')
+    return
+  }
+  if (trimmed === currentName && renameAvatarId.value === currentAvatarId) {
+    showRenameSheet.value = false
+    return
+  }
+  
   try {
     const res = await apiWithToken(`/api/rooms/${props.room.id}/rename`, props.myToken, {
       method: 'POST',
-      body: { playerId: props.myPlayerId, name: trimmed }
+      body: { playerId: props.myPlayerId, name: trimmed, avatarId: renameAvatarId.value }
     })
-    editingName.value = false
+    showRenameSheet.value = false
     emit('room-updated', res.room)
-  } catch (e) { alert('改名失败：' + e.message) }
+  } catch (e) {
+    alert('改名失败：' + e.message)
+  }
 }
 
 // ─── 向银行缴款的金额偏好缓存（localStorage） ────────────────────────────────
@@ -1637,11 +1807,6 @@ async function submitFine() {
   } catch (e) { alert('操作失败：' + e.message) }
 }
 
-function endGame() {
-  if (!confirm('确认结束本局游戏并返回首页？')) return
-  emit('end-game')
-}
-
 // ─── 存款 ─────────────────────────────────────────────────────────────────────
 const depositAmount = ref(null)
 const depositLoading = ref(false)
@@ -1753,19 +1918,151 @@ async function submitRepay(loan) {
 }</script>
 
 <style scoped>
-/* ── 整体布局 ── */
-.player-root {
+/* ── 转账玩家网格 ── */
+.transfer-player-grid {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.transfer-player-item {
+  position: relative;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  padding-bottom: 72px; /* 给底部 tabbar 留空间 */
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 8px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all .15s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.page-content {
-  flex: 1;
+.transfer-player-item:active {
+  transform: scale(0.95);
+  background: rgba(124,58,237,.15);
+  border-color: rgba(124,58,237,.6);
 }
 
-/* ── 主页内转账子 tab（胶囊型） ── */
+.transfer-player-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+  object-fit: cover;
+  box-shadow: 0 2px 8px rgba(0,0,0,.2);
+}
+
+.role-profile-btn {
+  border: 0;
+  cursor: pointer;
+  background: transparent;
+}
+
+.role-player-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  object-fit: cover;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .2);
+}
+
+.player-status-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.battle-player-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  object-fit: cover;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, .18);
+  flex-shrink: 0;
+}
+
+.rename-sheet-body {
+  padding: 24px 20px;
+}
+
+.rename-profile-preview {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.rename-current-avatar {
+  width: 68px;
+  height: 68px;
+  border-radius: 20px;
+  object-fit: cover;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .3);
+}
+
+.rename-preview-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.rename-preview-sub {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #94a3b8;
+}
+
+.avatar-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.avatar-picker-btn {
+  padding: 8px 6px 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.04);
+  color: #cbd5e1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  transition: .18s ease;
+}
+
+.avatar-picker-btn.active {
+  border-color: rgba(96, 165, 250, .7);
+  background: rgba(59, 130, 246, .16);
+  color: #eff6ff;
+  box-shadow: 0 10px 22px rgba(37, 99, 235, .2);
+}
+
+.avatar-picker-img {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 14px;
+  object-fit: cover;
+  background: rgba(255,255,255,.08);
+}
+
+.transfer-player-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e2e8f0;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
 .sub-tab-bar {
   display: flex;
   gap: 0;
@@ -1967,14 +2264,6 @@ async function submitRepay(loan) {
   position: relative;
 }
 
-.lottery-number-ban {
-  position: absolute;
-  top: 2px;
-  right: 4px;
-  font-size: 13px;
-  line-height: 1;
-}
-
 .lottery-number-btn.active,
 .lottery-number-btn.mine {
   background: linear-gradient(135deg, #7c3aed, #4f46e5);
@@ -1983,9 +2272,10 @@ async function submitRepay(loan) {
 }
 
 .lottery-number-btn.sold {
-  background: rgba(148,163,184,.16);
-  border-color: rgba(148,163,184,.24);
-  color: #94a3b8;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.25);
+  color: #ef4444;
+  cursor: pointer;
 }
 
 .lottery-number-btn:disabled {
@@ -1995,6 +2285,13 @@ async function submitRepay(loan) {
 
 .lottery-buy-btn {
   min-width: 140px;
+}
+
+.lottery-buy-btn:disabled {
+  background: rgba(124, 58, 237, 0.15) !important;
+  color: rgba(255, 255, 255, 0.4) !important;
+  border-color: rgba(124, 58, 237, 0.3) !important;
+  box-shadow: none !important;
 }
 
 .lottery-last-result {
@@ -2138,14 +2435,7 @@ async function submitRepay(loan) {
   margin-top: 6px;
 }
 
-/* ── 其他 ── */.end-btn {
-  background: rgba(100,116,139,.22);
-  color: #cbd5e1;
-  border: 1px solid rgba(100,116,139,.4);
-}
-.end-btn:hover {
-  background: rgba(100,116,139,.35);
-}
+/* ── 其他 ── */
 .name-clickable {
   cursor: pointer;
   display: flex;
@@ -2754,13 +3044,7 @@ async function submitRepay(loan) {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: rgba(124,58,237,.25);
-  color: #c4b5fd;
-  font-size: 15px;
-  font-weight: 800;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  object-fit: cover;
   flex-shrink: 0;
 }
 .sell-buyer-info {
@@ -3704,6 +3988,34 @@ async function submitRepay(loan) {
   font-size: 15px;
   color: #94a3b8;
   margin: 0;
+}
+
+.top-toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.95);
+  color: #f8fafc;
+  padding: 10px 20px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  z-index: 10000;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+}
+
+.toast-slide-enter-active,
+.toast-slide-leave-active {
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.toast-slide-enter-from,
+.toast-slide-leave-to {
+  transform: translate(-50%, -20px);
+  opacity: 0;
 }
 
 </style>

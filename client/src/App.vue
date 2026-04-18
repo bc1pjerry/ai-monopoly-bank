@@ -29,7 +29,6 @@
       :myToken="myToken"
       :myPlayerId="myPlayerId"
       @room-updated="onRoomUpdated"
-      @end-game="onEndGame"
     />
 
     <!-- 无效链接 -->

@@ -15,6 +15,7 @@
 * { box-sizing: border-box; touch-action: manipulation; }
 html, body, #app {
   min-height: 100%;
+  background-color: #08101f;
 }
 body {
   margin: 0;

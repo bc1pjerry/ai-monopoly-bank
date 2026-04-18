@@ -8,7 +8,7 @@ CLIENT_DIR="$PROJECT_DIR/client"
 PORT=8765
 
 usage() {
-  echo "用法: $0 {start|stop}"
+  echo "用法: $0 {start|stop|restart}"
   exit 1
 }
 
@@ -35,7 +35,7 @@ cmd_start() {
     OLD_PID=$(cat "$PID_FILE")
     if kill -0 "$OLD_PID" 2>/dev/null; then
       echo "服务已在运行 (PID: $OLD_PID)"
-      exit 0
+      return 0
     else
       rm -f "$PID_FILE"
     fi
@@ -71,14 +71,14 @@ cmd_start() {
     echo "启动失败！查看日志："
     cat "$LOG_FILE"
     rm -f "$PID_FILE"
-    exit 1
+    return 1
   fi
 }
 
 cmd_stop() {
   if [ ! -f "$PID_FILE" ]; then
     echo "服务未在运行 (PID 文件不存在)"
-    exit 0
+    return 0
   fi
 
   PID=$(cat "$PID_FILE")
@@ -93,8 +93,14 @@ cmd_stop() {
   fi
 }
 
+cmd_restart() {
+  cmd_stop
+  cmd_start
+}
+
 case "${1:-}" in
   start) cmd_start ;;
   stop)  cmd_stop  ;;
+  restart) cmd_restart ;;
   *)     usage     ;;
 esac

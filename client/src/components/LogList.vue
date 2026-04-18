@@ -1,7 +1,19 @@
 <template>
   <div class="log-list">
+    <div class="filter-bar" v-if="myPlayerName">
+      <label class="filter-label">
+        <input type="checkbox" v-model="showOnlyMine" />
+        <span class="checkbox-box"></span>
+        只看与我相关
+      </label>
+    </div>
+
     <div class="log" v-if="allLogs.length">
-      <div class="log-item" v-for="log in allLogs" :key="log.id">
+      <div v-if="showOnlyMine && displayedLogs.length === 0 && !loading" class="empty-filtered">
+        没有与你相关的流水记录。
+      </div>
+
+      <div class="log-item" v-for="log in displayedLogs" :key="log.id">
         <!-- 第一行：类型胶囊 -->
         <div class="log-row-type">
           <span class="pill" :class="logClass(log.type)">{{ logLabel(log.type) }}</span>
@@ -18,7 +30,7 @@
               <span class="desc-text">{{ parsedLog(log).desc }}</span>
             </template>
           </div>
-          <span class="amount">¥{{ parsedLog(log).amount }}</span>
+          <span class="amount" v-if="parsedLog(log).amount">¥{{ parsedLog(log).amount }}</span>
         </div>
         <!-- 第三行：时间 + 备注 -->
         <div class="log-row-time">
@@ -45,8 +57,11 @@ const props = defineProps({
   logs: { type: Array, default: () => [] },
   logsTotal: { type: Number, default: 0 },
   roomId: { type: String, default: '' },
-  token: { type: String, default: '' }
+  token: { type: String, default: '' },
+  myPlayerName: { type: String, default: '' }
 })
+
+const showOnlyMine = ref(false)
 
 const extraLogs = ref([])
 const loading = ref(false)
@@ -60,6 +75,10 @@ watch(() => props.logs, () => {
 })
 
 const allLogs = computed(() => [...props.logs, ...extraLogs.value])
+const displayedLogs = computed(() => {
+  if (!showOnlyMine.value || !props.myPlayerName) return allLogs.value
+  return allLogs.value.filter(log => log.text && log.text.includes(props.myPlayerName))
+})
 const total = computed(() => props.logsTotal || props.logs.length)
 const hasMore = computed(() => allLogs.value.length < total.value)
 
@@ -122,6 +141,55 @@ function parsedLog(log) {
 </script>
 
 <style scoped>
+.filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.filter-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: rgba(167, 176, 207, 0.8);
+  cursor: pointer;
+  user-select: none;
+}
+.filter-label input[type="checkbox"] {
+  display: none;
+}
+.checkbox-box {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid rgba(167, 176, 207, 0.4);
+  background: rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+.filter-label input[type="checkbox"]:checked + .checkbox-box {
+  background: #7c3aed;
+  border-color: #7c3aed;
+}
+.filter-label input[type="checkbox"]:checked + .checkbox-box::after {
+  content: "";
+  width: 4px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  margin-top: -2px;
+}
+.empty-filtered {
+  text-align: center;
+  padding: 20px 0;
+  font-size: 13px;
+  color: rgba(167, 176, 207, 0.5);
+}
+
 .log-list {
   display: flex;
   flex-direction: column;

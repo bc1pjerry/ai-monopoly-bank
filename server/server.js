@@ -8,6 +8,7 @@ const { URL } = require('url');
 const Database = require('better-sqlite3');
 const { WebSocketServer } = require('ws');
 const { createAiHandler, chat, DEFAULT_MODEL } = require('./ai');
+const { AVATAR_COUNT, avatarFilePath, avatarPath, normalizeAvatarId } = require('./avatar');
 
 function getLocalIP() {
   const nets = os.networkInterfaces();
@@ -52,7 +53,8 @@ db.exec(`
     room_id  TEXT NOT NULL REFERENCES rooms(id),
     name     TEXT NOT NULL,
     balance  INTEGER NOT NULL,
-    token    TEXT NOT NULL
+    token    TEXT NOT NULL,
+    avatar_id INTEGER NOT NULL DEFAULT 1
   );
 
   CREATE TABLE IF NOT EXISTS logs (
@@ -119,6 +121,7 @@ try { db.exec(`CREATE INDEX IF NOT EXISTS idx_deposits_player ON deposits(player
 try { db.exec(`CREATE TABLE IF NOT EXISTS loans (id TEXT PRIMARY KEY, player_id TEXT NOT NULL, room_id TEXT NOT NULL, principal INTEGER NOT NULL, remaining INTEGER NOT NULL, rate REAL NOT NULL, created_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'active', ai_reason TEXT NOT NULL DEFAULT '')`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_loans_room ON loans(room_id)`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_loans_player ON loans(player_id)`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN avatar_id INTEGER NOT NULL DEFAULT 1`); } catch {}
 
 // ─── 修复旧数据：status 列新增前暂停的房间仍为 active，根据日志修正 ──────────
 try {
@@ -142,11 +145,11 @@ const stmts = {
   ),
   getRoom: db.prepare('SELECT * FROM rooms WHERE id = ?'),
   insertPlayer: db.prepare(
-    'INSERT INTO players (id, room_id, name, balance, token) VALUES (?, ?, ?, ?, ?)'
+    'INSERT INTO players (id, room_id, name, balance, token, avatar_id) VALUES (?, ?, ?, ?, ?, ?)'
   ),
   getPlayers: db.prepare('SELECT * FROM players WHERE room_id = ? ORDER BY rowid'),
   updatePlayer: db.prepare(
-    'UPDATE players SET name = ?, balance = ? WHERE id = ?'
+    'UPDATE players SET name = ?, balance = ?, avatar_id = ? WHERE id = ?'
   ),
   insertLog: db.prepare(
     'INSERT INTO logs (id, room_id, ts, type, text, note) VALUES (?, ?, ?, ?, ?, ?)'
@@ -205,6 +208,25 @@ function randomToken() {
 
 function propertyAssetValue(property) {
   return Number(property.price || 0) + Number(property.build_cost || 0);
+}
+
+function playerAvatarId(player, fallback = 1) {
+  return normalizeAvatarId(player?.avatar_id, fallback);
+}
+
+function attachAvatar(player, fallback = 1) {
+  const avatarId = playerAvatarId(player, fallback);
+  return {
+    ...player,
+    avatar_id: avatarId,
+    avatar_url: avatarPath(avatarId)
+  };
+}
+
+function persistPlayer(player) {
+  const avatarId = playerAvatarId(player);
+  player.avatar_id = avatarId;
+  stmts.updatePlayer.run(player.name, player.balance, avatarId, player.id);
 }
 
 function wouldMakeBalanceNegative(player, delta) {
@@ -290,7 +312,7 @@ function settleLotteryDraw(roomId, room, now = Date.now()) {
       const player = playerMap.get(winner.playerId);
       if (!player) continue;
       player.balance += prizePerWinner;
-      stmts.updatePlayer.run(player.name, player.balance, player.id);
+      persistPlayer(player);
     }
     nextBankBalance -= bankContribution;
   }
@@ -367,7 +389,8 @@ function createRoom(playerCount, startingMoney, goSalary = 200) {
     id: `${now}_${i}_${Math.random().toString(36).slice(2, 6)}`,
     name: `玩家${i + 1}`,
     balance: Number(startingMoney),
-    token: randomToken()
+    token: randomToken(),
+    avatar_id: (i % AVATAR_COUNT) + 1
   }));
 
   const config = JSON.stringify({ playerCount, startingMoney: Number(startingMoney), goSalary: Number(goSalary), bankBalance: 0, interestRate: 1.5, interestIntervalMin: 10, lastInterestAt: Date.now(), lottery: defaultLotteryConfig(now) });
@@ -375,7 +398,7 @@ function createRoom(playerCount, startingMoney, goSalary = 200) {
   const insertAll = db.transaction(() => {
     stmts.insertRoom.run(roomId, now, now, bankerToken, config);
     for (const p of players) {
-      stmts.insertPlayer.run(p.id, roomId, p.name, p.balance, p.token);
+      stmts.insertPlayer.run(p.id, roomId, p.name, p.balance, p.token, p.avatar_id);
     }
     stmts.insertLog.run(
       `${now}_seed`, roomId, now, 'system',
@@ -392,7 +415,7 @@ function getRoom(roomId, logLimit = 50, logOffset = 0) {
   const row = stmts.getRoom.get(roomId);
   if (!row) return null;
   const logsTotal = stmts.getLogsCount.get(roomId).total;
-  const players = stmts.getPlayers.all(roomId);
+  const players = stmts.getPlayers.all(roomId).map((player, index) => attachAvatar(player, (index % AVATAR_COUNT) + 1));
   const properties = stmts.getProperties.all(roomId).map(p => ({
     ...p,
     rents: JSON.parse(p.rents)
@@ -435,7 +458,7 @@ function updateRoom(room) {
   const updateAll = db.transaction(() => {
     stmts.updateRoomTs.run(now, room.id);
     for (const p of room.players) {
-      stmts.updatePlayer.run(p.name, p.balance, p.id);
+      persistPlayer(p);
     }
   });
   updateAll();
@@ -661,7 +684,7 @@ function publicRoom(room) {
     updatedAt: room.updatedAt,
     status: room.status || 'active',
     config: room.config,
-    players: room.players.map(({ token: _t, room_id: _r, ...rest }) => rest),
+    players: room.players.map(({ token: _t, room_id: _r, ...rest }, index) => attachAvatar(rest, (index % AVATAR_COUNT) + 1)),
     properties: room.properties || [],
     deposits: (room.deposits || []).map(({ room_id: _r, ...rest }) => rest),
     loans: (room.loans || []).map(({ room_id: _r, ...rest }) => rest),
@@ -732,6 +755,15 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && pathname === '/api/localip') {
     return send(res, 200, { ok: true, ip: LOCAL_IP, port: PORT });
+  }
+
+  if (req.method === 'GET' && /^\/api\/avatar\/\d+\.png$/.test(pathname)) {
+    const avatarId = normalizeAvatarId(pathname.match(/(\d+)\.png$/)?.[1]);
+    try {
+      return send(res, 200, fs.readFileSync(avatarFilePath(avatarId)), 'image/png');
+    } catch {
+      return send(res, 404, 'Avatar not found', 'text/plain; charset=utf-8');
+    }
   }
 
   // ── AI Gateway ──────────────────────────────────────────────────────────────
@@ -961,9 +993,17 @@ const server = http.createServer(async (req, res) => {
       if (identity.role === 'player' && identity.player.id !== player.id)
         return send(res, 403, { ok: false, error: 'forbidden' });
       const oldName = player.name;
+      const oldAvatarId = playerAvatarId(player);
       player.name = String(reqBody.name || '').trim().slice(0, 20) || player.name;
-      stmts.updatePlayer.run(player.name, player.balance, player.id);
-      addLog(room.id, { type: 'system', text: `${oldName} 重命名为 ${player.name}`, note: '玩家编辑' });
+      player.avatar_id = normalizeAvatarId(reqBody.avatarId, oldAvatarId);
+      persistPlayer(player);
+      if (oldName !== player.name || oldAvatarId !== player.avatar_id) {
+        addLog(room.id, {
+          type: 'system',
+          text: oldName !== player.name ? `${oldName} 重命名为 ${player.name}` : `${player.name} 更换了头像`,
+          note: oldAvatarId !== player.avatar_id ? `玩家编辑 · 头像 ${oldAvatarId} → ${player.avatar_id}` : '玩家编辑'
+        });
+      }
       const updated = publicRoom(getRoom(roomId));
       broadcastRoom(roomId, { type: 'room_update', room: updated });
       return send(res, 200, { ok: true, room: updated });
@@ -983,7 +1023,7 @@ const server = http.createServer(async (req, res) => {
           return send(res, 400, { ok: false, error: 'insufficient_balance' });
         }
         player.balance += reqBody.type === 'bank-add' ? amount : -amount;
-        stmts.updatePlayer.run(player.name, player.balance, player.id);
+        persistPlayer(player);
         // 更新银行资金：bank-add 银行发钱，bankBalance 减少；bank-sub 银行扣钱（收钱），bankBalance 增加
         const bankDelta = reqBody.type === 'bank-add' ? -amount : amount;
         const newBankBalance = (room.config.bankBalance ?? 0) + bankDelta;
@@ -1000,7 +1040,7 @@ const server = http.createServer(async (req, res) => {
         if (!player) return send(res, 404, { ok: false, error: 'player_not_found' });
         if (wouldMakeBalanceNegative(player, -amount)) return send(res, 400, { ok: false, error: 'insufficient_balance' });
         player.balance -= amount;
-        stmts.updatePlayer.run(player.name, player.balance, player.id);
+        persistPlayer(player);
         // 玩家向银行缴款，bankBalance 增加
         const newBankBalance = (room.config.bankBalance ?? 0) + amount;
         const newConfig = { ...room.config, bankBalance: newBankBalance };
@@ -1021,8 +1061,8 @@ const server = http.createServer(async (req, res) => {
         from.balance -= amount;
         to.balance += amount;
         const updateTwo = db.transaction(() => {
-          stmts.updatePlayer.run(from.name, from.balance, from.id);
-          stmts.updatePlayer.run(to.name, to.balance, to.id);
+          persistPlayer(from);
+          persistPlayer(to);
         });
         updateTwo();
         addLog(room.id, { type: 'transfer', text: `${from.name} 向 ${to.name} 转账 ¥${amount}`, note });
@@ -1032,7 +1072,7 @@ const server = http.createServer(async (req, res) => {
         if (!player) return send(res, 404, { ok: false, error: 'player_not_found' });
         if (wouldMakeBalanceNegative(player, -amount)) return send(res, 400, { ok: false, error: 'insufficient_balance' });
         player.balance -= amount;
-        stmts.updatePlayer.run(player.name, player.balance, player.id);
+        persistPlayer(player);
         // 更新银行资金
         const newBankBalance = (room.config.bankBalance ?? 0) + amount;
         const newConfig = { ...room.config, bankBalance: newBankBalance };
@@ -1077,7 +1117,7 @@ const server = http.createServer(async (req, res) => {
         if (wouldMakeBalanceNegative(player, -amount)) return send(res, 400, { ok: false, error: 'insufficient_balance' });
 
         player.balance -= amount;
-        stmts.updatePlayer.run(player.name, player.balance, player.id);
+        persistPlayer(player);
 
         const newBankBalance = (room.config.bankBalance ?? 0) + amount;
         const newConfig = { ...room.config, bankBalance: newBankBalance };
@@ -1118,7 +1158,7 @@ const server = http.createServer(async (req, res) => {
         const nextBuildCost = currentBuildCost - refundAmount;
 
         player.balance += refundAmount;
-        stmts.updatePlayer.run(player.name, player.balance, player.id);
+        persistPlayer(player);
 
         const newBankBalance = (room.config.bankBalance ?? 0) - refundAmount;
         const newConfig = { ...room.config, bankBalance: newBankBalance };
@@ -1202,7 +1242,7 @@ const server = http.createServer(async (req, res) => {
           // 出售给银行：卖家收钱，银行资金减少
           db.prepare('DELETE FROM properties WHERE id = ?').run(prop.id);
           seller.balance += amount;
-          stmts.updatePlayer.run(seller.name, seller.balance, seller.id);
+          persistPlayer(seller);
           const newBankBalance2 = (room.config.bankBalance ?? 0) - amount;
           const newConfig2 = { ...room.config, bankBalance: newBankBalance2 };
           saveRoomConfig(roomId, newConfig2);
@@ -1233,8 +1273,8 @@ const server = http.createServer(async (req, res) => {
           seller.balance += sale.amount;
           buyer.balance -= sale.amount;
           const applySale = db.transaction(() => {
-            stmts.updatePlayer.run(seller.name, seller.balance, seller.id);
-            stmts.updatePlayer.run(buyer.name, buyer.balance, buyer.id);
+            persistPlayer(seller);
+            persistPlayer(buyer);
             stmts.updatePropertyOwner.run(buyer.id, prop.id);
           });
           applySale();
@@ -1269,7 +1309,7 @@ const server = http.createServer(async (req, res) => {
         if (mortgageProp.mortgaged) return send(res, 400, { ok: false, error: 'already_mortgaged' });
         const mortgageAmount = Math.floor(mortgageProp.price / 2);
         mortgager.balance += mortgageAmount;
-        stmts.updatePlayer.run(mortgager.name, mortgager.balance, mortgager.id);
+        persistPlayer(mortgager);
         const newBankBalanceMortgage = (room.config.bankBalance ?? 0) - mortgageAmount;
         const newConfigMortgage = { ...room.config, bankBalance: newBankBalanceMortgage };
         saveRoomConfig(roomId, newConfigMortgage);
@@ -1293,7 +1333,7 @@ const server = http.createServer(async (req, res) => {
         const redeemAmount = principal + interest;
         if (wouldMakeBalanceNegative(redeemer, -redeemAmount)) return send(res, 400, { ok: false, error: 'insufficient_balance' });
         redeemer.balance -= redeemAmount;
-        stmts.updatePlayer.run(redeemer.name, redeemer.balance, redeemer.id);
+        persistPlayer(redeemer);
         const newBankBalanceRedeem = (room.config.bankBalance ?? 0) + redeemAmount;
         const newConfigRedeem = { ...room.config, bankBalance: newBankBalanceRedeem };
         saveRoomConfig(roomId, newConfigRedeem);
@@ -1333,7 +1373,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         player.balance -= ticketPrice;
-        stmts.updatePlayer.run(player.name, player.balance, player.id);
+        persistPlayer(player);
 
         const nextJackpotPool = Number(lottery.jackpotPool || 0) + ticketPrice;
         saveRoomConfig(roomId, {
@@ -1374,7 +1414,7 @@ const server = http.createServer(async (req, res) => {
 
       // 玩家余额扣减，银行资金增加
       player.balance -= depositAmount;
-      stmts.updatePlayer.run(player.name, player.balance, player.id);
+      persistPlayer(player);
       const newBankBalanceDep = (room.config.bankBalance ?? 0) + depositAmount;
       const newConfigDep = { ...room.config, bankBalance: newBankBalanceDep };
       db.prepare('UPDATE rooms SET config = ?, updated_at = ? WHERE id = ?')
@@ -1416,7 +1456,7 @@ const server = http.createServer(async (req, res) => {
       db.prepare('UPDATE rooms SET config = ?, updated_at = ? WHERE id = ?')
         .run(JSON.stringify(newConfigWd), Date.now(), roomId);
       player.balance += withdrawAmount;
-      stmts.updatePlayer.run(player.name, player.balance, player.id);
+      persistPlayer(player);
       stmts.updateDepositStatus.run('withdrawn', deposit.id);
 
       addLog(roomId, {
@@ -1469,7 +1509,7 @@ const server = http.createServer(async (req, res) => {
 
       // 银行发钱给玩家，银行资金减少
       player.balance += loanAmount;
-      stmts.updatePlayer.run(player.name, player.balance, player.id);
+      persistPlayer(player);
       const newBankBalanceLoan = (room.config.bankBalance ?? 0) - loanAmount;
       const newConfigLoan = { ...room.config, bankBalance: newBankBalanceLoan };
       db.prepare('UPDATE rooms SET config = ?, updated_at = ? WHERE id = ?')
@@ -1503,7 +1543,7 @@ const server = http.createServer(async (req, res) => {
       if (player.balance < repayAmount) return send(res, 400, { ok: false, error: 'insufficient_balance' });
 
       player.balance -= repayAmount;
-      stmts.updatePlayer.run(player.name, player.balance, player.id);
+      persistPlayer(player);
       const newRemaining = loan.remaining - repayAmount;
       const newBankBalanceRepay = (room.config.bankBalance ?? 0) + repayAmount;
       const newConfigRepay = { ...room.config, bankBalance: newBankBalanceRepay };
@@ -1595,7 +1635,10 @@ const server = http.createServer(async (req, res) => {
       const resetAll = db.transaction(() => {
         for (let i = 0; i < room.players.length; i++) {
           const p = room.players[i];
-          stmts.updatePlayer.run(`玩家${i + 1}`, room.config.startingMoney, p.id);
+          p.name = `玩家${i + 1}`;
+          p.balance = room.config.startingMoney;
+          p.avatar_id = (i % AVATAR_COUNT) + 1;
+          persistPlayer(p);
         }
         // 重置银行资金为 0，重置利息计时，清空存款贷款
         const now = Date.now();

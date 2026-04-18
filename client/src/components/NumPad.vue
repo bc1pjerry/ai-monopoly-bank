@@ -1,40 +1,59 @@
 <template>
   <div class="numpad">
-    <!-- 金额显示屏 -->
-    <div class="numpad-display" :class="{ 'has-value': display !== '0' }">
+    <!-- 金额显示屏 (Clickable Trigger) -->
+    <div class="numpad-display trigger" :class="{ 'has-value': display !== '0' }" @click="openModal">
       <span class="numpad-currency">¥</span>
       <span class="numpad-value">{{ formattedDisplay }}</span>
     </div>
 
-    <!-- 数字键盘 -->
-    <div class="numpad-grid">
-      <button class="numpad-key" @click="press('1')">1</button>
-      <button class="numpad-key" @click="press('2')">2</button>
-      <button class="numpad-key" @click="press('3')">3</button>
+    <!-- 弹窗键盘 -->
+    <Teleport to="body">
+      <Transition name="fade">
+        <div v-if="isOpen" class="numpad-modal-mask" @click="closeModal">
+          <div class="numpad-modal-content" @click.stop>
+            
+            <div class="numpad-modal-header">
+              <div class="numpad-display modal-display" :class="{ 'has-value': display !== '0' }">
+                <span class="numpad-currency">¥</span>
+                <span class="numpad-value">{{ formattedDisplay }}</span>
+              </div>
+              <button class="numpad-confirm" @click="closeModal">确认</button>
+            </div>
 
-      <button class="numpad-key" @click="press('4')">4</button>
-      <button class="numpad-key" @click="press('5')">5</button>
-      <button class="numpad-key" @click="press('6')">6</button>
+            <!-- 快捷金额 -->
+            <div v-if="quickAmounts.length" class="numpad-quick">
+              <button
+                v-for="v in quickAmounts"
+                :key="v"
+                class="numpad-quick-btn"
+                :class="{ active: numericValue === v }"
+                @click="setAmount(v)"
+              >{{ v }}</button>
+            </div>
 
-      <button class="numpad-key" @click="press('7')">7</button>
-      <button class="numpad-key" @click="press('8')">8</button>
-      <button class="numpad-key" @click="press('9')">9</button>
+            <!-- 数字键盘 -->
+            <div class="numpad-grid">
+              <button class="numpad-key" @click="press('1')">1</button>
+              <button class="numpad-key" @click="press('2')">2</button>
+              <button class="numpad-key" @click="press('3')">3</button>
 
-      <button class="numpad-key numpad-clear" @click="clear">清空</button>
-      <button class="numpad-key" @click="press('0')">0</button>
-      <button class="numpad-key numpad-del" @click="del">⌫</button>
-    </div>
+              <button class="numpad-key" @click="press('4')">4</button>
+              <button class="numpad-key" @click="press('5')">5</button>
+              <button class="numpad-key" @click="press('6')">6</button>
 
-    <!-- 快捷金额（slot 支持外部定制，默认显示常用面额） -->
-    <div v-if="quickAmounts.length" class="numpad-quick">
-      <button
-        v-for="v in quickAmounts"
-        :key="v"
-        class="numpad-quick-btn"
-        :class="{ active: numericValue === v }"
-        @click="setAmount(v)"
-      >{{ v }}</button>
-    </div>
+              <button class="numpad-key" @click="press('7')">7</button>
+              <button class="numpad-key" @click="press('8')">8</button>
+              <button class="numpad-key" @click="press('9')">9</button>
+
+              <button class="numpad-key numpad-clear" @click="clear">清空</button>
+              <button class="numpad-key" @click="press('0')">0</button>
+              <button class="numpad-key numpad-del" @click="del">⌫</button>
+            </div>
+
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -46,6 +65,16 @@ const props = defineProps({
   quickAmounts: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['update:modelValue'])
+
+const isOpen = ref(false)
+
+function openModal() {
+  isOpen.value = true
+}
+
+function closeModal() {
+  isOpen.value = false
+}
 
 // 内部用字符串维护，避免前导零问题
 const display = ref(props.modelValue ? String(props.modelValue) : '0')
@@ -120,6 +149,12 @@ function setAmount(v) {
   min-height: 62px;
   transition: border-color .15s, background .15s;
 }
+.numpad-display.trigger {
+  cursor: pointer;
+}
+.numpad-display.trigger:active {
+  transform: scale(0.98);
+}
 .numpad-display.has-value {
   border-color: rgba(124,58,237,.5);
   background: rgba(124,58,237,.08);
@@ -139,16 +174,86 @@ function setAmount(v) {
   color: #eef2ff;
 }
 
+/* ── 弹窗 ── */
+.numpad-modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.numpad-modal-content {
+  width: 100%;
+  max-width: 600px;
+  background: #1e1e24;
+  border-radius: 24px 24px 0 0;
+  padding: 24px;
+  box-shadow: 0 -4px 24px rgba(0,0,0,0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
+}
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.numpad-modal-header {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+}
+.numpad-modal-header .modal-display {
+  flex: 1;
+  margin: 0;
+  background: rgba(0,0,0,.2);
+  border-color: rgba(255,255,255,.1);
+}
+.numpad-modal-header .modal-display.has-value {
+  border-color: rgba(124,58,237,.5);
+  background: rgba(124,58,237,.08);
+}
+.numpad-confirm {
+  padding: 0 24px;
+  border-radius: 14px;
+  background: #7c3aed;
+  color: white;
+  font-size: 18px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+  user-select: none;
+}
+.numpad-confirm:active {
+  background: #6d28d9;
+  transform: scale(0.95);
+}
+
 /* ── 键盘网格 ── */
 .numpad-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  gap: 12px;
 }
 .numpad-key {
-  padding: 16px 0;
-  border-radius: 14px;
-  font-size: 22px;
+  padding: 18px 0;
+  border-radius: 16px;
+  font-size: 24px;
   font-weight: 600;
   background: rgba(255,255,255,.07);
   color: #eef2ff;
@@ -160,20 +265,19 @@ function setAmount(v) {
 }
 .numpad-key:hover {
   background: rgba(255,255,255,.14);
-  transform: translateY(-1px);
 }
 .numpad-key:active {
   transform: scale(.95);
   background: rgba(255,255,255,.2);
 }
 .numpad-clear {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
   color: #a7b0cf;
   background: rgba(255,255,255,.04);
 }
 .numpad-del {
-  font-size: 20px;
+  font-size: 22px;
   color: #fca5a5;
   background: rgba(239,68,68,.08);
   border-color: rgba(239,68,68,.2);
@@ -186,14 +290,14 @@ function setAmount(v) {
 .numpad-quick {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 .numpad-quick-btn {
   flex: 1;
   min-width: 52px;
-  padding: 8px 6px;
-  border-radius: 10px;
-  font-size: 14px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  font-size: 15px;
   font-weight: 600;
   background: rgba(255,255,255,.06);
   color: #a7b0cf;
