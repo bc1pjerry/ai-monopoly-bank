@@ -16,9 +16,49 @@
 'use strict';
 
 const https = require('https');
+const fs    = require('fs');
+const path  = require('path');
 
 const XIAOMI_BASE_URL = 'https://api.xiaomimimo.com/v1';
 const DEFAULT_MODEL   = 'mimo-v2-omni';
+
+// ─── 文件日志工具 ──────────────────────────────────────────────────────────────
+
+const LOGS_DIR = path.join(__dirname, '..', 'logs');
+
+function ensureLogsDir() {
+  if (!fs.existsSync(LOGS_DIR)) {
+    fs.mkdirSync(LOGS_DIR, { recursive: true });
+  }
+}
+
+/**
+ * 写入一条 AI 日志到 logs/ai-YYYY-MM-DD.log
+ * 每条日志包含时间戳、类型、内容，方便 debug
+ */
+function aiLog(type, data) {
+  try {
+    ensureLogsDir();
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
+    const timeStr = now.toISOString();
+    const logFile = path.join(LOGS_DIR, `ai-${dateStr}.log`);
+
+    // 对 messages 中的 base64 图片做截断，避免日志过大
+    const sanitized = JSON.stringify(data, (key, value) => {
+      if (typeof value === 'string' && value.startsWith('data:image') && value.length > 200) {
+        return value.slice(0, 100) + `...[truncated, total ${value.length} chars]`;
+      }
+      return value;
+    }, 2);
+
+    const entry = `\n[${ timeStr }] [${type}]\n${sanitized}\n${'─'.repeat(60)}\n`;
+    fs.appendFileSync(logFile, entry, 'utf8');
+  } catch (e) {
+    // 日志写入失败不应影响主流程
+    console.warn('[AI-LOG] 写入日志失败:', e.message);
+  }
+}
 
 const SYSTEM_MESSAGE = {
   role: 'system',
@@ -39,7 +79,7 @@ function callChatCompletion(messages, options = {}) {
   if (!apiKey) throw new Error('XIAOMI_API_KEY 环境变量未设置');
 
   // max_completion_tokens 是 mimo API 的正确参数名
-  const maxTokens = options.max_tokens ?? options.max_completion_tokens ?? 2048;
+  const maxTokens = options.max_tokens ?? options.max_completion_tokens ?? 265000;
 
   const payload = JSON.stringify({
     model: options.model || DEFAULT_MODEL,
@@ -49,6 +89,9 @@ function callChatCompletion(messages, options = {}) {
     max_completion_tokens: maxTokens,
     ...options.extra
   });
+
+  const startTime = Date.now();
+  aiLog('REQUEST', { mode: 'non-stream', model: options.model || DEFAULT_MODEL, messages, options });
 
   return new Promise((resolve, reject) => {
     const url = new URL(`${XIAOMI_BASE_URL}/chat/completions`);
@@ -66,20 +109,27 @@ function callChatCompletion(messages, options = {}) {
       res.on('data', c => chunks.push(c));
       res.on('end', () => {
         const raw = Buffer.concat(chunks).toString('utf8');
+        const elapsed = Date.now() - startTime;
         try {
           const json = JSON.parse(raw);
           if (res.statusCode >= 400) {
+            aiLog('ERROR', { statusCode: res.statusCode, elapsed_ms: elapsed, body: raw });
             reject(new Error(`Xiaomi API ${res.statusCode}: ${raw}`));
           } else {
+            aiLog('RESPONSE', { elapsed_ms: elapsed, usage: json.usage, content: json.choices?.[0]?.message?.content?.slice(0, 500) });
             resolve(json);
           }
         } catch (e) {
+          aiLog('ERROR', { elapsed_ms: elapsed, parse_error: e.message, raw: raw.slice(0, 500) });
           reject(new Error(`解析响应失败: ${raw}`));
         }
       });
     });
 
-    req.on('error', reject);
+    req.on('error', (e) => {
+      aiLog('ERROR', { elapsed_ms: Date.now() - startTime, error: e.message });
+      reject(e);
+    });
     req.setTimeout(90000, () => req.destroy(new Error('请求超时')));
     req.write(payload);
     req.end();
@@ -90,7 +140,7 @@ function callChatCompletionStream(messages, options = {}, onChunk = null) {
   const apiKey = process.env.XIAOMI_API_KEY;
   if (!apiKey) return Promise.reject(new Error('XIAOMI_API_KEY 环境变量未设置'));
 
-  const maxTokens = options.max_tokens ?? options.max_completion_tokens ?? 2048;
+  const maxTokens = options.max_tokens ?? options.max_completion_tokens ?? 4096;
 
   const payload = JSON.stringify({
     model: options.model || DEFAULT_MODEL,
@@ -100,6 +150,9 @@ function callChatCompletionStream(messages, options = {}, onChunk = null) {
     max_completion_tokens: maxTokens,
     ...options.extra
   });
+
+  const startTime = Date.now();
+  aiLog('REQUEST', { mode: 'stream', model: options.model || DEFAULT_MODEL, messages, options });
 
   return new Promise((resolve, reject) => {
     const url = new URL(`${XIAOMI_BASE_URL}/chat/completions`);
@@ -119,7 +172,10 @@ function callChatCompletionStream(messages, options = {}, onChunk = null) {
       if (res.statusCode >= 400) {
         let errRaw = '';
         res.on('data', c => errRaw += c);
-        res.on('end', () => reject(new Error(`Xiaomi API ${res.statusCode}: ${errRaw}`)));
+        res.on('end', () => {
+          aiLog('ERROR', { mode: 'stream', statusCode: res.statusCode, elapsed_ms: Date.now() - startTime, body: errRaw });
+          reject(new Error(`Xiaomi API ${res.statusCode}: ${errRaw}`));
+        });
         return;
       }
 
@@ -136,15 +192,23 @@ function callChatCompletionStream(messages, options = {}, onChunk = null) {
             const json = JSON.parse(trimmed.slice(6));
             const delta = json.choices?.[0]?.delta?.content;
             if (delta) { fullText += delta; if (onChunk) onChunk(delta); }
-          } catch { /* 忽略格式异常行 */ }
+          } catch (e) {
+            aiLog('STREAM_PARSE_ERROR', { line: trimmed.slice(0, 200), error: e.message });
+          }
         }
       });
 
-      res.on('end', () => resolve(fullText));
+      res.on('end', () => {
+        aiLog('RESPONSE', { mode: 'stream', elapsed_ms: Date.now() - startTime, content: fullText.slice(0, 500), content_length: fullText.length });
+        resolve(fullText);
+      });
       res.on('error', reject);
     });
 
-    req.on('error', reject);
+    req.on('error', (e) => {
+      aiLog('ERROR', { mode: 'stream', elapsed_ms: Date.now() - startTime, error: e.message });
+      reject(e);
+    });
     req.setTimeout(120000, () => req.destroy(new Error('流式请求超时')));
     req.write(payload);
     req.end();

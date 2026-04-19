@@ -18,7 +18,8 @@ const ERROR_MESSAGES = {
   property_owner_changed: '地产归属已变化，请重新发起交易',
   invalid_lottery_number: '彩票号码必须在 1 到 30 之间',
   lottery_number_taken: '这个号码本期已经被买走了',
-  lottery_buy_cooldown: '距离上次购票未满 2 分钟'
+  lottery_buy_cooldown: '距离上次购票未满 2 分钟',
+  lottery_disabled: '本局未开启彩票系统'
 }
 
 export function setLanOrigin(origin) {

@@ -70,7 +70,7 @@
         <div class="sub-tab-bar">
           <button class="sub-tab-btn" :class="{ active: homeTab === 'transfer' }" @click="homeTab = 'transfer'">向玩家转账</button>
           <button class="sub-tab-btn" :class="{ active: homeTab === 'pay' }"      @click="homeTab = 'pay'">向银行缴款</button>
-          <button class="sub-tab-btn" :class="{ active: homeTab === 'lottery' }"  @click="homeTab = 'lottery'">彩票</button>
+          <button v-if="lotteryEnabled" class="sub-tab-btn" :class="{ active: homeTab === 'lottery' }"  @click="homeTab = 'lottery'">彩票</button>
           <button class="sub-tab-btn" :class="{ active: homeTab === 'deeds' }"    @click="homeTab = 'deeds'">我的地产</button>
         </div>
 
@@ -93,7 +93,7 @@
             </div>
           </div>
           
-          <NumPad v-model="transferAmount" :quickAmounts="[50,100,200,500,1000]" style="margin-bottom:12px;" />
+          <NumPad ref="transferNumPad" v-model="transferAmount" :quickAmounts="[50,100,200,500,1000]" style="margin-bottom:12px;" @ok="submitTransfer" />
           <button class="primary" style="width:100%;" @click="submitTransfer">确认转账</button>
         </div>
 
@@ -174,11 +174,11 @@
               </div>
             </div>
           </div>
-          <NumPad v-model="fineAmount" :quickAmounts="fineQuickAmounts" style="margin-bottom:12px;" />
+          <NumPad v-model="fineAmount" :quickAmounts="fineQuickAmounts" style="margin-bottom:12px;" @ok="submitFine" />
           <button class="red-btn" style="width:100%; border:0;" @click="submitFine">确认缴款</button>
         </div>
 
-        <div v-show="homeTab === 'lottery'" class="card lottery-card">
+        <div v-show="homeTab === 'lottery' && lotteryEnabled" class="card lottery-card">
           <div class="lottery-head">
             <div>
               <h2 style="margin:0;">彩票系统</h2>
@@ -371,7 +371,7 @@
             <!-- 存款操作 -->
             <div class="deposit-input-card">
               <div class="deposit-input-label">存入金额</div>
-              <NumPad v-model="depositAmount" />
+              <NumPad v-model="depositAmount" @ok="submitDeposit" />
               <div class="deposit-preview" v-if="depositAmount > 0">
                 预计每期利息：<span class="deposit-preview-val">+¥{{ fmt(Math.round(depositAmount * (room.config.interestRate ?? 1.5) / 100)) }}</span>
               </div>
@@ -415,7 +415,7 @@
             <div class="loan-input-card">
               <div class="loan-input-label">申请金额</div>
               <div class="loan-interest-hint">固定利率 {{ fixedLoanRate }}%/期，为存款利率的 3 倍；每期利息会直接从现金扣除，不累计到剩余本金</div>
-              <NumPad v-model="loanAmount" />
+              <NumPad v-model="loanAmount" @ok="submitLoan" />
               <button class="loan-btn" :disabled="!(loanAmount > 0) || loanLoading || myAvailableCredit <= 0" @click="submitLoan">
                 {{ loanLoading ? '处理中...' : '申请贷款' }}
               </button>
@@ -836,7 +836,7 @@
                 </div>
               </div>
               <!-- 金额输入 -->
-              <NumPad v-model="sellAmount" :quickAmounts="sellQuickAmounts" style="margin-bottom:4px;" />
+              <NumPad v-model="sellAmount" :quickAmounts="sellQuickAmounts" style="margin-bottom:4px;" @ok="submitSell" />
               <div class="sell-actions">
                 <button class="sell-back-btn" @click="sellStep = 'detail'">
                   <svg viewBox="0 0 16 16" fill="none" class="sell-back-icon">
@@ -1082,6 +1082,7 @@ onBeforeUnmount(() => {
 })
 
 const lottery = computed(() => ({
+  enabled: true,
   ticketPrice: 200,
   numberCount: 30,
   drawIntervalMin: 30,
@@ -1092,6 +1093,8 @@ const lottery = computed(() => ({
   lastResult: null,
   ...(props.room.config?.lottery || {})
 }))
+
+const lotteryEnabled = computed(() => lottery.value.enabled !== false)
 
 const lotteryNumbers = computed(() =>
   Array.from({ length: lottery.value.numberCount }, (_, index) => index + 1)
@@ -1133,11 +1136,18 @@ const lotteryCountdownLabel = computed(() => {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 })
 const canBuyLottery = computed(() =>
-  !lotteryCooldownMs.value
+  lotteryEnabled.value
+  && !lotteryCooldownMs.value
   && selectedLotteryNumber.value >= 1
   && selectedLotteryNumber.value <= lottery.value.numberCount
   && !soldLotteryNumbers.value.has(selectedLotteryNumber.value)
 )
+
+watch(lotteryEnabled, enabled => {
+  if (!enabled && homeTab.value === 'lottery') {
+    homeTab.value = 'transfer'
+  }
+}, { immediate: true })
 
 const showToast = ref(false)
 const toastMessage = ref('')
@@ -1468,10 +1478,17 @@ const transferProperties = computed(() => {
   return getPlayerProperties(toPlayerId.value)
 })
 
+const transferNumPad = ref(null)
+
 function selectTransferReason(reason, rentAmount = 0) {
   transferReason.value = reason
   if (reason !== 'manual') {
     transferAmount.value = Number(rentAmount) || 0
+  } else {
+    // 使用 nextTick 确保弹窗关闭、DOM 更新后再调起键盘
+    nextTick(() => {
+      transferNumPad.value?.openModal()
+    })
   }
 }
 

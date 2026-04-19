@@ -1,6 +1,7 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -26,6 +27,10 @@ const LOCAL_IP = getLocalIP();
 
 const PORT = process.env.PORT || 8765;
 const PROJECT_ROOT = path.join(__dirname, '..');
+const CERT_DIR = path.join(PROJECT_ROOT, 'certs');
+const CERT_FILE = path.join(CERT_DIR, 'cert.pem');
+const KEY_FILE = path.join(CERT_DIR, 'key.pem');
+const USE_HTTPS = fs.existsSync(CERT_FILE) && fs.existsSync(KEY_FILE);
 const DIST_DIR = path.join(PROJECT_ROOT, 'dist');
 const DATA_DIR = path.join(PROJECT_ROOT, 'data');
 const DB_FILE = path.join(DATA_DIR, 'monopoly.db');
@@ -239,8 +244,9 @@ function pendingPropertySales(config) {
   return Array.isArray(config?.pendingPropertySales) ? config.pendingPropertySales : [];
 }
 
-function defaultLotteryConfig(now = Date.now()) {
+function defaultLotteryConfig(now = Date.now(), overrides = {}) {
   return {
+    enabled: true,
     ticketPrice: 200,
     numberCount: 30,
     drawIntervalMin: 30,
@@ -249,7 +255,8 @@ function defaultLotteryConfig(now = Date.now()) {
     lastDrawAt: now,
     tickets: [],
     lastPurchaseAtByPlayer: {},
-    lastResult: null
+    lastResult: null,
+    ...overrides
   };
 }
 
@@ -382,7 +389,7 @@ function body(req) {
 
 // ─── 数据库操作 ──────────────────────────────────────────────────────────────
 
-function createRoom(playerCount, startingMoney, goSalary = 200) {
+function createRoom(playerCount, startingMoney, goSalary = 200, lotteryTicketPrice = 200, lotteryEnabled = true) {
   const roomId = randomId();
   const bankerToken = randomToken();
   const now = Date.now();
@@ -395,7 +402,19 @@ function createRoom(playerCount, startingMoney, goSalary = 200) {
     avatar_id: (i % AVATAR_COUNT) + 1
   }));
 
-  const config = JSON.stringify({ playerCount, startingMoney: Number(startingMoney), goSalary: Number(goSalary), bankBalance: 0, interestRate: 1.5, interestIntervalMin: 10, lastInterestAt: Date.now(), lottery: defaultLotteryConfig(now) });
+  const config = JSON.stringify({
+    playerCount,
+    startingMoney: Number(startingMoney),
+    goSalary: Number(goSalary),
+    bankBalance: 0,
+    interestRate: 1.5,
+    interestIntervalMin: 10,
+    lastInterestAt: Date.now(),
+    lottery: defaultLotteryConfig(now, {
+      enabled: lotteryEnabled !== false,
+      ticketPrice: Number(lotteryTicketPrice)
+    })
+  });
 
   const insertAll = db.transaction(() => {
     stmts.insertRoom.run(roomId, now, now, bankerToken, config);
@@ -503,15 +522,17 @@ async function autoAdjustInterestRate(roomId, currentBankBalance) {
 
 调整原则：
 1. 重点根据游戏内进行情况判断资金流动，而不是追求现实世界的小幅稳定调整
-2. 如果玩家普遍不存钱（活跃存款少或存款总额偏低），且银行现金因为发钱、贷款、赎买、派奖等原因降低或亏空，应明显提高利率，吸引玩家把现金存回银行
-3. 如果银行现金很多，且玩家已经大量存钱，应降低利率，让玩家更愿意取钱消费、买地、还款或进行交易
-4. 银行资金严重不足（< 基准资金池 20%）：可以大幅提高利率，快速吸引存款
-5. 银行资金充裕（> 基准资金池 150%）：可以明显降低利率，减少继续吸储
-6. 贷款总额远超存款：应提高利率以平衡银行风险和吸引存款
-7. 存款总额远超贷款且银行现金充裕：应降低利率，鼓励资金流出银行
-8. 大富翁局内经济波动可以很大，单次利率变动不设 2% 限制，只要不超过利率上下限即可
-9. 利率范围：最低 0.1%，最高 100%
-10. 若当前形势平稳，可维持现有利率不变
+2. 硬性规则：如果银行当前资金为负数（赤字/亏空），不要继续提高存款利率；输出的 rate 不得高于当前存款利率，只能维持或降低
+3. 银行已经赤字时，优先避免复利成本继续滚大，不要为了吸引存款而加息
+4. 如果银行现金仍为非负，但玩家普遍不存钱（活跃存款少或存款总额偏低），且银行现金明显降低，可以提高利率吸引玩家把现金存回银行
+5. 如果银行现金很多，且玩家已经大量存钱，应降低利率，让玩家更愿意取钱消费、买地、还款或进行交易
+6. 银行资金非负但严重不足（< 基准资金池 20%）：可以提高利率，快速吸引存款；但若已经为负数，不适用本条
+7. 银行资金充裕（> 基准资金池 150%）：可以明显降低利率，减少继续吸储
+8. 贷款总额远超存款且银行资金非负：可提高利率以平衡银行风险和吸引存款；若银行资金为负数，不要因此加息
+9. 存款总额远超贷款且银行现金充裕：应降低利率，鼓励资金流出银行
+10. 大富翁局内经济波动可以很大，单次利率变动不设 2% 限制，只要不超过利率上下限即可
+11. 利率范围：最低 0.1%，最高 100%
+12. 若当前形势平稳，或银行赤字但没有明确降息必要，可维持现有利率不变
 
 只输出一个 JSON，不要任何解释：{"rate": 数字保留1位小数, "reason": "调整原因（15字以内）", "changed": true或false}`;
 
@@ -519,7 +540,7 @@ async function autoAdjustInterestRate(roomId, currentBankBalance) {
       const raw = await chat([{ role: 'user', content: prompt }], {
         model: DEFAULT_MODEL,
         temperature: 0.2,
-        max_tokens: 128
+        max_tokens: 1024
       });
 
       // 提取 JSON
@@ -542,7 +563,10 @@ async function autoAdjustInterestRate(roomId, currentBankBalance) {
       if (!parsed || parsed.changed === false) return; // AI 认为无需调整
 
       // 约束范围：最低 0.1%，最高 100%
-      const newRate = Math.min(100, Math.max(0.1, Math.round(Number(parsed.rate) * 10) / 10));
+      let newRate = Math.min(100, Math.max(0.1, Math.round(Number(parsed.rate) * 10) / 10));
+      if (currentBankBalance < 0 && newRate > currentRate) {
+        newRate = currentRate;
+      }
       const aiReason = parsed.reason || 'AI 综合评估';
 
       if (newRate !== currentRate) {
@@ -563,7 +587,9 @@ async function autoAdjustInterestRate(roomId, currentBankBalance) {
       const highThreshold = base * 1.5;
       let newRate = currentRate;
       let reason = null;
-      if (currentBankBalance < lowThreshold) {
+      if (currentBankBalance < 0) {
+        return;
+      } else if (currentBankBalance < lowThreshold) {
         newRate = Math.min(100, Math.round((currentRate + 1) * 10) / 10);
         reason = `银行资金不足，提升利率至 ${newRate}% 吸引存款`;
       } else if (currentBankBalance > highThreshold) {
@@ -659,8 +685,8 @@ function serveFile(res, filePath) {
 
 // ─── HTTP 服务 ───────────────────────────────────────────────────────────────
 
-const server = http.createServer(async (req, res) => {
-  const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+const requestHandler = async (req, res) => {
+  const reqUrl = new URL(req.url, `${USE_HTTPS ? 'https' : 'http'}://${req.headers.host}`);
   const { pathname } = reqUrl;
 
   if (req.method === 'GET' && pathname === '/api/health') {
@@ -748,7 +774,7 @@ const server = http.createServer(async (req, res) => {
       const raw = await chat(messages, {
         model: DEFAULT_MODEL,
         temperature: 0.1,
-        max_tokens: 512
+        max_tokens: 4096
       });
 
       console.log('[OCR] model raw content:', JSON.stringify(raw).slice(0, 300));
@@ -808,7 +834,9 @@ const server = http.createServer(async (req, res) => {
         const playerCount = Math.max(2, Math.min(8, Number(data.playerCount || 4)));
         const startingMoney = Math.max(0, Number(data.startingMoney || 1500));
         const goSalary = Math.max(0, Number(data.goSalary ?? 200));
-        const room = createRoom(playerCount, startingMoney, goSalary);
+        const lotteryTicketPrice = Math.max(0, Number(data.lotteryTicketPrice ?? 200));
+        const lotteryEnabled = data.lotteryEnabled !== false;
+        const room = createRoom(playerCount, startingMoney, goSalary, lotteryTicketPrice, lotteryEnabled);
         return send(res, 200, {
           ok: true,
           roomId: room.id,
@@ -1295,6 +1323,9 @@ const server = http.createServer(async (req, res) => {
         const now = Date.now();
         const lastPurchaseAt = Number(lottery.lastPurchaseAtByPlayer[player.id] || 0);
 
+        if (lottery.enabled === false) {
+          return send(res, 400, { ok: false, error: 'lottery_disabled' });
+        }
         if (!(chosenNumber >= 1 && chosenNumber <= numberCount)) {
           return send(res, 400, { ok: false, error: 'invalid_lottery_number' });
         }
@@ -1562,7 +1593,16 @@ const server = http.createServer(async (req, res) => {
         }
         // 重置银行资金为 0，重置利息计时，清空存款贷款
         const now = Date.now();
-        const newConfig = { ...room.config, bankBalance: 0, lastInterestAt: now, lottery: defaultLotteryConfig(now) };
+        const prevLottery = getLotteryConfig(room.config, room.createdAt);
+        const newConfig = {
+          ...room.config,
+          bankBalance: 0,
+          lastInterestAt: now,
+          lottery: defaultLotteryConfig(now, {
+            enabled: prevLottery.enabled !== false,
+            ticketPrice: Number(prevLottery.ticketPrice ?? 200)
+          })
+        };
         db.prepare('UPDATE rooms SET config = ? WHERE id = ?').run(JSON.stringify(newConfig), roomId);
         db.prepare('DELETE FROM deposits WHERE room_id = ?').run(roomId);
         db.prepare('DELETE FROM loans WHERE room_id = ?').run(roomId);
@@ -1620,10 +1660,14 @@ const server = http.createServer(async (req, res) => {
   }
 
   return serveFile(res, path.join(DIST_DIR, 'index.html'));
-});
+};
+
+const server = USE_HTTPS
+  ? https.createServer({ key: fs.readFileSync(KEY_FILE), cert: fs.readFileSync(CERT_FILE) }, requestHandler)
+  : http.createServer(requestHandler);
 
 // ─── WebSocket 服务 ──────────────────────────────────────────────────────────
-// 握手 URL: ws://<host>/ws?room=<roomId>&token=<token>
+// 握手 URL: ws(s)://<host>/ws?room=<roomId>&token=<token>
 
 const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -1673,9 +1717,12 @@ wss.on('connection', (ws, req) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Monopoly bank listening on http://0.0.0.0:${PORT}`);
-  console.log(`WebSocket  endpoint  ws://0.0.0.0:${PORT}/ws`);
+  const proto = USE_HTTPS ? 'https' : 'http';
+  const wsProto = USE_HTTPS ? 'wss' : 'ws';
+  console.log(`Monopoly bank listening on ${proto}://0.0.0.0:${PORT}`);
+  console.log(`WebSocket  endpoint  ${wsProto}://0.0.0.0:${PORT}/ws`);
   console.log(`Database: ${DB_FILE}`);
+  if (USE_HTTPS) console.log('HTTPS enabled (certs loaded from certs/)');
 });
 
 // ─── 定时结算调度器 ──────────────────────────────────────────────────────────
@@ -1699,7 +1746,7 @@ setInterval(() => {
       const lottery = getLotteryConfig(room.config, room.createdAt);
       const lotteryIntervalMs = Number(lottery.drawIntervalMin || 30) * 60 * 1000;
       const lotteryLastDrawAt = lottery.lastDrawAt ?? room.createdAt;
-      const lotteryDue = now - lotteryLastDrawAt >= lotteryIntervalMs;
+      const lotteryDue = lottery.enabled !== false && now - lotteryLastDrawAt >= lotteryIntervalMs;
 
       if (!interestDue && !lotteryDue) continue;
 
@@ -1709,7 +1756,7 @@ setInterval(() => {
 
       if (interestDue) {
         // 1. 银行自身资金利息
-        const bankInterest = Math.round(bankBalance * (rate / 100));
+        const bankInterest = Math.round(Math.max(0, bankBalance) * (rate / 100));
         if (bankInterest !== 0) {
           bankBalance += bankInterest;
           hasChanges = true;

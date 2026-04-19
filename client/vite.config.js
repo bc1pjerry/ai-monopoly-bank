@@ -1,5 +1,12 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import fs from 'fs'
+import path from 'path'
+
+const certDir = path.join(__dirname, '..', 'certs')
+const certFile = path.join(certDir, 'cert.pem')
+const keyFile = path.join(certDir, 'key.pem')
+const hasCerts = fs.existsSync(certFile) && fs.existsSync(keyFile)
 
 export default defineConfig({
   plugins: [vue()],
@@ -8,8 +15,17 @@ export default defineConfig({
     emptyOutDir: true
   },
   server: {
+    ...(hasCerts ? {
+      https: {
+        key: fs.readFileSync(keyFile),
+        cert: fs.readFileSync(certFile)
+      }
+    } : {}),
     proxy: {
-      '/api': 'http://localhost:8765'
+      '/api': {
+        target: `${hasCerts ? 'https' : 'http'}://localhost:8765`,
+        secure: false
+      }
     }
   }
 })

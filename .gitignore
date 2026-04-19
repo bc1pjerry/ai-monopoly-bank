@@ -15,4 +15,8 @@ data/
 
 # 日志 & PID
 *.log
+logs/
 *.pid
+
+# HTTPS 证书
+certs/

@@ -69,7 +69,7 @@
             <div class="kpi-sub interest-next" :class="interestCountdownSecs <= 60 ? 'interest-countdown--soon' : ''">下次调整：{{ interestCountdownLabel }}</div>
           </div>
           
-          <div class="kpi-card kpi-card--lottery">
+          <div v-if="lotteryEnabled" class="kpi-card kpi-card--lottery">
             <div class="kpi-card-top">
               <span class="kpi-label">彩票倒计时</span>
             </div>
@@ -159,7 +159,7 @@
           <label>备注</label>
           <input v-model="note" type="text" maxlength="60" placeholder="例如 过起点 / 买地 / 交租" />
         </div>
-        <NumPad v-model="amount" :quickAmounts="[50,100,200,500,1000]" style="margin-bottom:16px;" />
+        <NumPad v-model="amount" :quickAmounts="[50,100,200,500,1000]" style="margin-bottom:16px;" @ok="submitAction" />
         <div class="modal-actions">
           <button class="secondary" @click="actionVisible = false">取消</button>
           <button
@@ -235,7 +235,7 @@
           </div>
         </div>
         <div class="interest-preview">
-          预计下次利息：<span class="kpi-green">+¥{{ fmt(Math.round((room.config.bankBalance ?? 0) * ((room.config.interestRate ?? 1.5) / 100))) }}</span>
+          预计下次利息：<span class="kpi-green">+¥{{ fmt(bankInterestPreview) }}</span>
         </div>
         <div class="field">
           <label>利率（%）</label>
@@ -361,7 +361,12 @@ const totalLoans = computed(() =>
 const activeDepositCount = computed(() => activeDeposits.value.length)
 const activeLoanCount = computed(() => activeLoans.value.length)
 
+const bankInterestPreview = computed(() =>
+  Math.round(Math.max(0, Number(props.room.config?.bankBalance || 0)) * (Number(props.room.config?.interestRate ?? 1.5) / 100))
+)
+
 const lottery = computed(() => ({
+  enabled: true,
   ticketPrice: 200,
   numberCount: 30,
   drawIntervalMin: 30,
@@ -369,6 +374,8 @@ const lottery = computed(() => ({
   tickets: [],
   ...(props.room.config?.lottery || {})
 }))
+
+const lotteryEnabled = computed(() => lottery.value.enabled !== false)
 
 const lotteryBankBonusPreview = computed(() =>
   Math.max(0, Math.floor(Math.max(0, Number(props.room.config?.bankBalance || 0)) * 0.1))

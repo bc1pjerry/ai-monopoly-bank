@@ -174,7 +174,7 @@
           <label>备注</label>
           <input v-model="note" type="text" maxlength="60" placeholder="例如 过起点 / 买地 / 交租" />
         </div>
-        <NumPad v-model="amount" :quickAmounts="[50,100,200,500,1000]" style="margin-bottom:16px;" />
+        <NumPad v-model="amount" :quickAmounts="[50,100,200,500,1000]" style="margin-bottom:16px;" @ok="submitAction" />
         <div class="modal-actions">
           <button class="secondary" @click="actionVisible = false">取消</button>
           <button

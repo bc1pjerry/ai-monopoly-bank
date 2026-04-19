@@ -17,7 +17,7 @@
                 <span class="numpad-currency">¥</span>
                 <span class="numpad-value">{{ formattedDisplay }}</span>
               </div>
-              <button class="numpad-confirm" @click="closeModal">确认</button>
+              <button class="numpad-confirm" @click="confirm">确认</button>
             </div>
 
             <!-- 快捷金额 -->
@@ -64,7 +64,7 @@ const props = defineProps({
   modelValue: { type: Number, default: null },
   quickAmounts: { type: Array, default: () => [] },
 })
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'ok'])
 
 const isOpen = ref(false)
 
@@ -75,6 +75,13 @@ function openModal() {
 function closeModal() {
   isOpen.value = false
 }
+
+function confirm() {
+  isOpen.value = false
+  emit('ok')
+}
+
+defineExpose({ openModal })
 
 // 内部用字符串维护，避免前导零问题
 const display = ref(props.modelValue ? String(props.modelValue) : '0')

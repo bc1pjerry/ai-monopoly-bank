@@ -170,7 +170,7 @@ onMounted(async () => {
   try {
     const ipData = await fetch('/api/localip').then(r => r.json())
     if (ipData.ok && ipData.ip !== '127.0.0.1') {
-      setLanOrigin(`http://${ipData.ip}:${ipData.port}`)
+      setLanOrigin(`${location.protocol}//${ipData.ip}:${ipData.port}`)
     }
   } catch {}
 

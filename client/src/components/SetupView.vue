@@ -18,6 +18,18 @@
           <label>过起点奖励金额</label>
           <input v-model.number="goSalary" type="number" min="0" step="1" />
         </div>
+        <div class="field">
+          <label>彩票系统</label>
+          <label class="switch-row">
+            <input v-model="lotteryEnabled" type="checkbox" />
+            <span class="switch-ui" aria-hidden="true"><span></span></span>
+            <span>{{ lotteryEnabled ? '开启' : '关闭' }}</span>
+          </label>
+        </div>
+        <div class="field" v-if="lotteryEnabled">
+          <label>彩票单张价格</label>
+          <input v-model.number="lotteryTicketPrice" type="number" min="0" step="1" />
+        </div>
       </div>
       <button class="primary" style="width:100%;" @click="handleCreate">创建房间</button>
       <p class="muted">创建后会显示庄家链接和每位玩家的专属链接，发给对应的人即可。</p>
@@ -38,6 +50,7 @@
             </div>
             <div class="history-meta">
               {{ r.config.playerCount }} 人局 · 起始 ¥{{ fmt(r.config.startingMoney) }} · 过起点 ¥{{ fmt(r.config.goSalary ?? 200) }}
+              · 彩票{{ r.config.lottery?.enabled === false ? '关闭' : '开启' }}
               · 最后活动 {{ timeAgo(r.updatedAt) }}
             </div>
           </div>
@@ -75,6 +88,8 @@ const emit = defineEmits(['created', 'resume'])
 const playerCount = ref(4)
 const startingMoney = ref(1500)
 const goSalary = ref(200)
+const lotteryEnabled = ref(true)
+const lotteryTicketPrice = ref(200)
 const historyRooms = ref([])
 const historyLoaded = ref(false)
 const confirmDeleteId = ref(null)
@@ -83,7 +98,13 @@ async function handleCreate() {
   try {
     const data = await apiFetch('/api/rooms', {
       method: 'POST',
-      body: { playerCount: playerCount.value, startingMoney: startingMoney.value, goSalary: goSalary.value }
+      body: {
+        playerCount: playerCount.value,
+        startingMoney: startingMoney.value,
+        goSalary: goSalary.value,
+        lotteryEnabled: lotteryEnabled.value,
+        lotteryTicketPrice: lotteryTicketPrice.value
+      }
     })
     emit('created', data)
   } catch (e) {
@@ -217,4 +238,42 @@ onMounted(loadHistory)
 .field { display:flex; flex-direction:column; gap:6px; margin-bottom:12px; }
 .field label { font-size:13px; color:var(--muted); }
 .field input { padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:rgba(255,255,255,.05); color:inherit; font-size:14px; }
+.switch-row {
+  display: flex;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 10px !important;
+  min-height: 36px;
+  cursor: pointer;
+  color: inherit !important;
+}
+.switch-row input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.switch-ui {
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(148,163,184,.35);
+  border: 1px solid var(--line);
+  padding: 2px;
+  transition: background .16s, border-color .16s;
+}
+.switch-ui span {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform .16s;
+}
+.switch-row input:checked + .switch-ui {
+  background: rgba(139,92,246,.45);
+  border-color: rgba(139,92,246,.7);
+}
+.switch-row input:checked + .switch-ui span {
+  transform: translateX(20px);
+}
 </style>

@@ -204,7 +204,7 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref } from 'vue'
 
 const emit = defineEmits(['close', 'deed-confirmed'])
 
-const OPEN_CV_URL = 'https://docs.opencv.org/4.9.0/opencv.js'
+const OPEN_CV_URL = '/opencv.js'
 const STABLE_FRAME_TARGET = 10
 const DETECTION_INTERVAL = 110
 const MIN_SCORE_TO_DRAW = 0.46
@@ -831,7 +831,7 @@ onBeforeUnmount(() => {
 .ocr-sheet {
   width: 100%;
   max-width: 480px;
-  max-height: 92vh;
+  max-height: 96vh;
   background: linear-gradient(160deg, #0f172a 0%, #1a1040 100%);
   border-top: 1px solid rgba(255,255,255,.12);
   border-radius: 24px 24px 0 0;
@@ -973,7 +973,7 @@ onBeforeUnmount(() => {
 .camera-frame {
   position: relative;
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 3 / 4;
   overflow: hidden;
   border-radius: 16px;
   background: #020617;
@@ -1072,15 +1072,15 @@ onBeforeUnmount(() => {
 .preview-wrap {
   position: relative;
   width: 100%;
-  max-height: 240px;
+  max-height: 360px;
   border-radius: 14px;
   overflow: hidden;
   border: 1px solid rgba(124,58,237,.4);
 }
 .preview-img {
   width: 100%;
-  max-height: 240px;
-  object-fit: cover;
+  max-height: 360px;
+  object-fit: contain;
   display: block;
 }
 .scan-line {
@@ -1142,7 +1142,7 @@ onBeforeUnmount(() => {
 }
 .preview-thumb-wrap {
   width: 100%;
-  height: 100px;
+  height: 140px;
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid rgba(124,58,237,.3);
@@ -1150,7 +1150,7 @@ onBeforeUnmount(() => {
 .preview-thumb {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
 }
 
