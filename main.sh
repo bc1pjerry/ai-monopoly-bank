@@ -30,6 +30,13 @@ cmd_start() {
 
   echo "Node: $(node -v) ($(which node))"
 
+  NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]")
+  NODE_MINOR=$(node -p "process.versions.node.split('.')[1]")
+  if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 13 ]; }; then
+    echo "Node.js v22.13.0 or newer is required because the server uses built-in SQLite."
+    return 1
+  fi
+
   # ─── 检查是否已在运行 ────────────────────────────────────────────────
   if [ -f "$PID_FILE" ]; then
     OLD_PID=$(cat "$PID_FILE")
@@ -44,17 +51,17 @@ cmd_start() {
   # ─── 安装服务端依赖 ──────────────────────────────────────────────────
   if [ ! -d "$SERVER_DIR/node_modules" ]; then
     echo "正在安装服务端依赖..."
-    npm install --prefix "$SERVER_DIR"
+    (cd "$SERVER_DIR" && npm install)
   fi
 
   # ─── 安装前端依赖并构建 ──────────────────────────────────────────────
   if [ ! -d "$CLIENT_DIR/node_modules" ]; then
     echo "正在安装前端依赖..."
-    npm install --prefix "$CLIENT_DIR"
+    (cd "$CLIENT_DIR" && npm install)
   fi
 
   echo "正在构建前端..."
-  npm run build --prefix "$CLIENT_DIR"
+  (cd "$CLIENT_DIR" && npm run build)
 
   # ─── 启动服务 ────────────────────────────────────────────────────────
   echo "正在启动服务..."

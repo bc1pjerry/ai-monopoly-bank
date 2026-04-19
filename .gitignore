@@ -16,4 +16,3 @@ data/
 # 日志 & PID
 *.log
 *.pid
-server/package-lock.json

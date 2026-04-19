@@ -5,7 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const Database = require('better-sqlite3');
+const createDatabase = require('./db');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const JSON_FILE = path.join(DATA_DIR, 'rooms.json');
@@ -24,7 +24,7 @@ if (roomIds.length === 0) {
   process.exit(0);
 }
 
-const db = new Database(DB_FILE);
+const db = createDatabase(DB_FILE);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 

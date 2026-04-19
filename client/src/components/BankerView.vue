@@ -29,46 +29,63 @@
 
         <!-- KPI 行 -->
         <div class="kpi-row">
-          <!-- 第一行 -->
-          <div class="kpi-card">
-            <div class="kpi-label">已购房产</div>
-            <div class="kpi-value">{{ totalPropertyCount }}</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-label">总余额</div>
-            <div class="kpi-value kpi-green">¥{{ fmt(totalBalance) }}</div>
-          </div>
-          <div class="kpi-card kpi-card--bank" @click="interestModalVisible = true" title="点击配置利息">
-            <div class="kpi-card-header">
-              <div class="kpi-label" style="margin-bottom:0">银行资金</div>
+          <div class="kpi-card kpi-card--property">
+            <div class="kpi-card-top">
+              <span class="kpi-label">已购房产</span>
             </div>
-            <div class="kpi-value" :class="(room.config.bankBalance ?? 0) >= 0 ? 'kpi-green' : 'kpi-red'">¥{{ fmt(room.config.bankBalance ?? 0) }}</div>
+            <div class="kpi-main-val">
+              <span class="kpi-number">{{ totalPropertyCount }}</span>
+            </div>
+            <div class="kpi-sub">全场已购地契</div>
           </div>
-          <!-- 第二行 -->
-          <div class="kpi-card kpi-card--deposit">
-            <div class="kpi-label">总存款</div>
-            <div class="kpi-value kpi-teal">¥{{ fmt(totalDeposits) }}</div>
-            <div class="kpi-sub">{{ activeDepositCount }} 笔</div>
+          
+          <div class="kpi-card kpi-card--bank">
+            <div class="kpi-card-top">
+              <span class="kpi-label">银行现金</span>
+            </div>
+            <div class="kpi-main-val" :class="(room.config.bankBalance ?? 0) >= 0 ? 'kpi-green' : 'kpi-red'">
+              <span class="kpi-currency">¥</span><span class="kpi-number">{{ fmt(room.config.bankBalance ?? 0) }}</span>
+            </div>
+            <div class="kpi-sub-row">
+              <div class="kpi-sub-item">
+                <span class="kpi-sub-label">存款</span>
+                <strong class="kpi-teal">¥{{ fmt(totalDeposits) }}</strong>
+              </div>
+              <div class="kpi-sub-item">
+                <span class="kpi-sub-label">贷款</span>
+                <strong class="kpi-orange">¥{{ fmt(totalLoans) }}</strong>
+              </div>
+            </div>
           </div>
-          <div class="kpi-card kpi-card--loan">
-            <div class="kpi-label">总贷款</div>
-            <div class="kpi-value kpi-orange">¥{{ fmt(totalLoans) }}</div>
-            <div class="kpi-sub">{{ activeLoanCount }} 笔</div>
-          </div>
-          <div class="kpi-card kpi-card--bank" @click="interestModalVisible = true" title="点击配置利息">
-            <div class="kpi-label">当前利率</div>
-            <div class="kpi-value kpi-green">{{ (room.config.interestRate ?? 1.5) }}%</div>
+          
+          <div class="kpi-card kpi-card--interest" @click="interestModalVisible = true" title="点击配置利息">
+            <div class="kpi-card-top">
+              <span class="kpi-label">利率</span>
+              <span class="kpi-action-icon">⚙️</span>
+            </div>
+            <div class="kpi-main-val kpi-green">
+              <span class="kpi-number">{{ (room.config.interestRate ?? 1.5) }}</span><span class="kpi-unit">%</span>
+            </div>
             <div class="kpi-sub interest-next" :class="interestCountdownSecs <= 60 ? 'interest-countdown--soon' : ''">下次调整：{{ interestCountdownLabel }}</div>
           </div>
+          
           <div class="kpi-card kpi-card--lottery">
-            <div class="kpi-label">彩票奖池</div>
-            <div class="kpi-value kpi-purple">¥{{ fmt(lottery.jackpotPool) }}</div>
-            <div class="kpi-sub">已售 {{ lottery.tickets.length }} 张</div>
-          </div>
-          <div class="kpi-card kpi-card--lottery">
-            <div class="kpi-label">彩票开奖</div>
-            <div class="kpi-value">{{ lotteryCountdownLabel }}</div>
-            <div class="kpi-sub">银行需出 ¥{{ fmt(lotteryBankBonusPreview) }}</div>
+            <div class="kpi-card-top">
+              <span class="kpi-label">彩票倒计时</span>
+            </div>
+            <div class="kpi-main-val kpi-purple">
+              <span class="kpi-number">{{ lotteryCountdownLabel }}</span>
+            </div>
+            <div class="kpi-sub-row">
+              <div class="kpi-sub-item">
+                <span class="kpi-sub-label">奖池</span>
+                <strong class="kpi-purple">¥{{ fmt(lottery.jackpotPool) }}</strong>
+              </div>
+              <div class="kpi-sub-item">
+                <span class="kpi-sub-label">已售出</span>
+                <strong>{{ lottery.tickets.length }} 张</strong>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -696,7 +713,7 @@ async function endGame() {
 /* ══ KPI 行 ══ */
 .kpi-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -706,22 +723,58 @@ async function endGame() {
   border-radius: 18px;
   padding: 16px 18px;
   backdrop-filter: blur(8px);
+  min-height: 130px;
+  display: flex;
+  flex-direction: column;
+}
+
+.kpi-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
 }
 
 .kpi-label {
-  font-size: 11px;
+  font-size: 12px;
   color: #a7b0cf;
   text-transform: uppercase;
   letter-spacing: .08em;
   font-weight: 600;
-  margin-bottom: 6px;
 }
 
-.kpi-value {
-  font-size: 26px;
-  font-weight: 900;
+.kpi-action-icon {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.kpi-main-val {
+  display: flex;
+  align-items: baseline;
   color: #eef2ff;
+  margin-bottom: auto;
+  padding-bottom: 12px;
+}
+
+.kpi-currency {
+  font-size: 18px;
+  font-weight: 700;
+  margin-right: 2px;
+  opacity: 0.8;
+}
+
+.kpi-number {
+  font-size: 32px;
+  font-weight: 900;
   letter-spacing: -.02em;
+  line-height: 1;
+}
+
+.kpi-unit {
+  font-size: 14px;
+  font-weight: 600;
+  margin-left: 2px;
+  opacity: 0.8;
 }
 
 .kpi-green { color: #34d399; }
@@ -733,7 +786,34 @@ async function endGame() {
 .kpi-sub {
   font-size: 11px;
   color: #64748b;
-  margin-top: 2px;
+  margin-top: auto;
+}
+
+.kpi-sub-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255,255,255,0.08);
+}
+
+.kpi-sub-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kpi-sub-label {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.kpi-sub-item strong {
+  font-size: 15px;
+  font-weight: 800;
+  color: #eef2ff;
+  font-variant-numeric: tabular-nums;
 }
 
 .interest-next {
@@ -741,26 +821,28 @@ async function endGame() {
   letter-spacing: .04em;
 }
 
-.kpi-card--deposit {
-  border-color: rgba(45,212,191,.25);
-  background: rgba(45,212,191,.06);
-}
-.kpi-card--loan {
-  border-color: rgba(251,146,60,.25);
-  background: rgba(251,146,60,.06);
+.kpi-card--property {
+  border-color: rgba(148,163,184,.22);
 }
 .kpi-card--lottery {
   border-color: rgba(167,139,250,.25);
   background: rgba(124,58,237,.08);
 }
 
-/* ══ 银行资金卡片（带利息徽标） ══ */
 .kpi-card--bank {
-  cursor: pointer;
   position: relative;
+  border-color: rgba(45,212,191,.22);
+  background: rgba(45,212,191,.05);
+}
+
+.kpi-card--interest {
+  cursor: pointer;
+  border-color: rgba(52,211,153,.24);
+  background: rgba(52,211,153,.06);
   transition: border-color .2s, background .2s;
 }
-.kpi-card--bank:hover {
+
+.kpi-card--interest:hover {
   border-color: rgba(52,211,153,.4);
   background: rgba(52,211,153,.07);
 }
@@ -1168,9 +1250,16 @@ async function endGame() {
     border-top: 1px solid rgba(255,255,255,.1);
   }
   .kpi-row {
-    grid-template-columns: repeat(4, 1fr);
-  }  .topbar-center {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .topbar-center {
     display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .kpi-row {
+    grid-template-columns: 1fr;
   }
 }
 

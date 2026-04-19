@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { URL } = require('url');
-const Database = require('better-sqlite3');
+const createDatabase = require('./db');
 const { WebSocketServer } = require('ws');
 const { createAiHandler, chat, DEFAULT_MODEL } = require('./ai');
 const { AVATAR_COUNT, avatarFilePath, avatarPath, normalizeAvatarId } = require('./avatar');
@@ -34,7 +34,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // ─── 数据库初始化 ────────────────────────────────────────────────────────────
 
-const db = new Database(DB_FILE);
+const db = createDatabase(DB_FILE);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
@@ -502,13 +502,16 @@ async function autoAdjustInterestRate(roomId, currentBankBalance) {
 - 活跃贷款总额：¥${totalLoans}（共 ${activeLoans.length} 笔）
 
 调整原则：
-1. 银行资金严重不足（< 基准资金池 20%）：大幅提升利率，吸引玩家存款
-2. 银行资金充裕（> 基准资金池 150%）：适当降低利率，鼓励玩家取款消费
-3. 存款总额远超贷款：可适当降低利率
-4. 贷款总额远超存款：应提高利率以平衡风险
-5. 利率变动幅度每次不超过 2%，保持经济稳定
-6. 利率范围：最低 0.1%，最高 100%
-7. 若当前形势平稳，可维持现有利率不变
+1. 重点根据游戏内进行情况判断资金流动，而不是追求现实世界的小幅稳定调整
+2. 如果玩家普遍不存钱（活跃存款少或存款总额偏低），且银行现金因为发钱、贷款、赎买、派奖等原因降低或亏空，应明显提高利率，吸引玩家把现金存回银行
+3. 如果银行现金很多，且玩家已经大量存钱，应降低利率，让玩家更愿意取钱消费、买地、还款或进行交易
+4. 银行资金严重不足（< 基准资金池 20%）：可以大幅提高利率，快速吸引存款
+5. 银行资金充裕（> 基准资金池 150%）：可以明显降低利率，减少继续吸储
+6. 贷款总额远超存款：应提高利率以平衡银行风险和吸引存款
+7. 存款总额远超贷款且银行现金充裕：应降低利率，鼓励资金流出银行
+8. 大富翁局内经济波动可以很大，单次利率变动不设 2% 限制，只要不超过利率上下限即可
+9. 利率范围：最低 0.1%，最高 100%
+10. 若当前形势平稳，可维持现有利率不变
 
 只输出一个 JSON，不要任何解释：{"rate": 数字保留1位小数, "reason": "调整原因（15字以内）", "changed": true或false}`;
 

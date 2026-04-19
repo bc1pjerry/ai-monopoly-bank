@@ -1,17 +1,12 @@
 <template>
-  <!-- 全屏遮罩 -->
-  <div class="ocr-overlay" @click.self="$emit('close')">
+  <div class="ocr-overlay" @click.self="closeModal">
     <div class="ocr-sheet">
-      <!-- 标题栏 -->
       <div class="ocr-header">
         <span class="ocr-title">扫描地契</span>
-        <button class="ocr-close" @click="$emit('close')">✕</button>
+        <button class="ocr-close" @click="closeModal">✕</button>
       </div>
 
-      <!-- 主体 -->
       <div class="ocr-body">
-
-        <!-- ① 未拍照：引导区 -->
         <template v-if="phase === 'idle'">
           <div class="guide-area">
             <div class="guide-icon">
@@ -27,7 +22,16 @@
           </div>
 
           <div class="action-btns">
-            <label class="primary-btn camera-label">
+            <button class="primary-btn" type="button" @click="startLiveScan">
+              <svg viewBox="0 0 20 20" fill="none" class="btn-icon">
+                <rect x="2" y="4" width="16" height="12" rx="3" stroke="currentColor" stroke-width="1.6"/>
+                <path d="M6 8.5h8M6 11.5h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                <path d="M4 3v3M16 3v3M4 14v3M16 14v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              </svg>
+              实时扫描
+            </button>
+
+            <label class="secondary-btn camera-label">
               <svg viewBox="0 0 20 20" fill="none" class="btn-icon">
                 <rect x="1" y="5" width="18" height="13" rx="3" stroke="currentColor" stroke-width="1.6"/>
                 <circle cx="10" cy="11" r="3.5" stroke="currentColor" stroke-width="1.6"/>
@@ -60,7 +64,47 @@
           </div>
         </template>
 
-        <!-- ② 识别中 -->
+        <template v-else-if="phase === 'camera'">
+          <div class="camera-area">
+            <div class="camera-frame" :class="{ 'camera-frame--locked': stableFrames >= STABLE_FRAME_TARGET }">
+              <video ref="videoRef" class="camera-video" autoplay muted playsinline></video>
+              <canvas ref="overlayRef" class="camera-overlay"></canvas>
+              <div class="camera-corners" aria-hidden="true">
+                <span class="corner corner-tl"></span>
+                <span class="corner corner-tr"></span>
+                <span class="corner corner-bl"></span>
+                <span class="corner corner-br"></span>
+              </div>
+            </div>
+
+            <div class="camera-status">
+              <span class="status-dot" :class="{ 'status-dot--ready': detectedQuad }"></span>
+              <span>{{ cameraHint }}</span>
+            </div>
+
+            <div class="lock-meter" aria-hidden="true">
+              <span :style="{ width: `${lockProgress}%` }"></span>
+            </div>
+
+            <div class="camera-actions">
+              <button class="secondary-btn" type="button" @click="reset">取消</button>
+              <button class="primary-btn" type="button" @click="captureFromCamera(false)" :disabled="isAutoCapturing">
+                拍摄识别
+              </button>
+            </div>
+
+            <label class="album-inline">
+              从相册选择
+              <input
+                type="file"
+                accept="image/*"
+                class="hidden-input"
+                @change="onFileSelected"
+              />
+            </label>
+          </div>
+        </template>
+
         <template v-else-if="phase === 'scanning'">
           <div class="scanning-area">
             <div class="preview-wrap">
@@ -71,7 +115,6 @@
           </div>
         </template>
 
-        <!-- ③ 识别失败 -->
         <template v-else-if="phase === 'error'">
           <div class="error-area">
             <div class="error-banner">
@@ -87,15 +130,12 @@
           </div>
         </template>
 
-        <!-- ④ 识别结果 -->
         <template v-else-if="phase === 'result'">
           <div class="result-area">
-            <!-- 预览缩略图 -->
             <div class="preview-thumb-wrap">
               <img :src="previewUrl" class="preview-thumb" alt="地契" />
             </div>
 
-            <!-- 可编辑结果卡 -->
             <div class="deed-card">
               <div class="deed-row">
                 <span class="deed-label">地产名称</span>
@@ -154,20 +194,41 @@
             </div>
           </div>
         </template>
-
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref } from 'vue'
 
 const emit = defineEmits(['close', 'deed-confirmed'])
 
-const phase = ref('idle')        // 'idle' | 'scanning' | 'error' | 'result'
+const OPEN_CV_URL = 'https://docs.opencv.org/4.9.0/opencv.js'
+const STABLE_FRAME_TARGET = 10
+const DETECTION_INTERVAL = 110
+const MIN_SCORE_TO_DRAW = 0.46
+const MIN_SCORE_TO_LOCK = 0.58
+
+const phase = ref('idle')
 const previewUrl = ref('')
 const errorMsg = ref('')
+const cameraHint = ref('正在打开摄像头…')
+const detectedQuad = ref(null)
+const stableFrames = ref(0)
+const isAutoCapturing = ref(false)
+
+const videoRef = ref(null)
+const overlayRef = ref(null)
+
+const workCanvas = document.createElement('canvas')
+const fullCanvas = document.createElement('canvas')
+let stream = null
+let rafId = 0
+let lastDetectionAt = 0
+let lastQuad = null
+let lastCandidate = null
+let cvReady = false
 
 const rentLabels = ['空地过路费', '1 栋过路费', '2 栋过路费', '3 栋过路费', '4 栋过路费', '酒店过路费']
 
@@ -178,26 +239,486 @@ const deed = reactive({
   rents: [null, null, null, null, null, null]
 })
 
-// ─── 文件选择 ─────────────────────────────────────────────────────────────────
+const lockProgress = computed(() => Math.min(100, Math.round(stableFrames.value / STABLE_FRAME_TARGET * 100)))
+
+async function startLiveScan() {
+  clearError()
+  resetDeed()
+  phase.value = 'camera'
+  cameraHint.value = '正在打开摄像头…'
+  detectedQuad.value = null
+  stableFrames.value = 0
+  isAutoCapturing.value = false
+  lastQuad = null
+  lastCandidate = null
+
+  await nextTick()
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      },
+      audio: false
+    })
+  } catch (err) {
+    phase.value = 'error'
+    errorMsg.value = '浏览器未允许实时摄像头。可以改用“拍照识别”，或在 HTTPS/localhost 环境下打开实时扫描。'
+    return
+  }
+
+  const video = videoRef.value
+  if (!video) return
+  video.srcObject = stream
+  await waitForVideo(video)
+
+  try {
+    await loadOpenCv()
+    cvReady = true
+    cameraHint.value = '将地契放入画面'
+  } catch (err) {
+    cvReady = false
+    cameraHint.value = '轮廓组件加载失败，可手动拍摄'
+  }
+
+  drawOverlay()
+  startDetectionLoop()
+}
+
+function waitForVideo(video) {
+  return new Promise((resolve, reject) => {
+    const done = () => {
+      video.play().then(resolve).catch(resolve)
+    }
+    if (video.readyState >= 2 && video.videoWidth > 0) return done()
+    video.onloadedmetadata = done
+    video.onerror = () => reject(new Error('摄像头画面加载失败'))
+  })
+}
+
+function loadOpenCv() {
+  if (window.cv?.Mat) return Promise.resolve()
+  if (window.__deedCvLoading) return window.__deedCvLoading
+
+  window.__deedCvLoading = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    const timeoutId = window.setTimeout(() => reject(new Error('OpenCV 加载超时')), 18000)
+
+    script.src = OPEN_CV_URL
+    script.async = true
+    script.onload = () => {
+      const finish = () => {
+        window.clearTimeout(timeoutId)
+        resolve()
+      }
+      if (window.cv?.Mat) return finish()
+      if (window.cv) window.cv.onRuntimeInitialized = finish
+      else reject(new Error('OpenCV 初始化失败'))
+    }
+    script.onerror = () => {
+      window.clearTimeout(timeoutId)
+      reject(new Error('OpenCV 加载失败'))
+    }
+    document.head.appendChild(script)
+  })
+
+  return window.__deedCvLoading
+}
+
+function startDetectionLoop() {
+  cancelAnimationFrame(rafId)
+  const tick = (now) => {
+    if (phase.value !== 'camera') return
+    if (cvReady && now - lastDetectionAt > DETECTION_INTERVAL) {
+      lastDetectionAt = now
+      runDetection()
+    } else {
+      drawOverlay(lastCandidate?.quad)
+    }
+    rafId = requestAnimationFrame(tick)
+  }
+  rafId = requestAnimationFrame(tick)
+}
+
+function runDetection() {
+  const video = videoRef.value
+  if (!video || video.videoWidth === 0 || video.videoHeight === 0 || isAutoCapturing.value) return
+
+  const candidate = findBestQuad(video)
+  if (!candidate || candidate.score < MIN_SCORE_TO_DRAW) {
+    lastCandidate = null
+    lastQuad = null
+    detectedQuad.value = null
+    stableFrames.value = 0
+    cameraHint.value = '未找到清晰边缘'
+    drawOverlay()
+    return
+  }
+
+  lastCandidate = candidate
+  detectedQuad.value = candidate.quad
+
+  if (candidate.score >= MIN_SCORE_TO_LOCK && isSimilarQuad(candidate.quad, lastQuad, video)) {
+    stableFrames.value += 1
+  } else {
+    stableFrames.value = 1
+  }
+
+  lastQuad = candidate.quad
+  cameraHint.value = stableFrames.value >= STABLE_FRAME_TARGET ? '已锁定，正在识别…' : '保持地契稳定'
+  drawOverlay(candidate.quad, candidate.score)
+
+  if (stableFrames.value >= STABLE_FRAME_TARGET) {
+    captureFromCamera(true)
+  }
+}
+
+function findBestQuad(video) {
+  const cv = window.cv
+  const maxSide = 640
+  const scale = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight))
+  const width = Math.max(1, Math.round(video.videoWidth * scale))
+  const height = Math.max(1, Math.round(video.videoHeight * scale))
+  workCanvas.width = width
+  workCanvas.height = height
+  workCanvas.getContext('2d', { willReadFrequently: true }).drawImage(video, 0, 0, width, height)
+
+  const src = cv.imread(workCanvas)
+  const gray = new cv.Mat()
+  const blur = new cv.Mat()
+  const edges = new cv.Mat()
+  const dilated = new cv.Mat()
+  const thresh = new cv.Mat()
+  const combined = new cv.Mat()
+  const kernel = cv.Mat.ones(3, 3, cv.CV_8U)
+  const contours = new cv.MatVector()
+  const hierarchy = new cv.Mat()
+  const candidates = []
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY)
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0)
+    cv.Canny(blur, edges, 30, 110)
+    cv.adaptiveThreshold(blur, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 41, 4)
+    cv.bitwise_not(thresh, thresh)
+    cv.bitwise_or(edges, thresh, combined)
+    cv.dilate(combined, dilated, kernel)
+    cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
+    for (let i = 0; i < contours.size(); i++) {
+      const contour = contours.get(i)
+      const area = cv.contourArea(contour)
+      const areaRatio = area / (width * height)
+      if (areaRatio < 0.06 || areaRatio > 0.9) {
+        contour.delete()
+        continue
+      }
+
+      const perimeter = cv.arcLength(contour, true)
+      const approx = new cv.Mat()
+      cv.approxPolyDP(contour, approx, Math.max(8, perimeter * 0.025), true)
+
+      if (approx.rows === 4 && cv.isContourConvex(approx)) {
+        const smallQuad = pointsFromApprox(approx)
+        const quad = smallQuad.map((p) => ({ x: p.x / scale, y: p.y / scale }))
+        const score = scoreQuad(quad, video, areaRatio)
+        if (score > 0) candidates.push({ quad, score, areaRatio })
+      }
+
+      approx.delete()
+      contour.delete()
+    }
+  } finally {
+    src.delete()
+    gray.delete()
+    blur.delete()
+    edges.delete()
+    dilated.delete()
+    thresh.delete()
+    combined.delete()
+    kernel.delete()
+    contours.delete()
+    hierarchy.delete()
+  }
+
+  candidates.sort((a, b) => b.score - a.score)
+  return candidates[0] || null
+}
+
+function pointsFromApprox(approx) {
+  const points = []
+  for (let i = 0; i < approx.rows; i++) {
+    points.push({ x: approx.intPtr(i, 0)[0], y: approx.intPtr(i, 0)[1] })
+  }
+  return orderQuad(points)
+}
+
+function scoreQuad(quad, video, areaRatio) {
+  const ordered = orderQuad(quad)
+  const w1 = distance(ordered[0], ordered[1])
+  const w2 = distance(ordered[3], ordered[2])
+  const h1 = distance(ordered[0], ordered[3])
+  const h2 = distance(ordered[1], ordered[2])
+  const width = (w1 + w2) / 2
+  const height = (h1 + h2) / 2
+  const longSide = Math.max(width, height)
+  const shortSide = Math.max(1, Math.min(width, height))
+  const aspect = longSide / shortSide
+  const aspectScore = clamp01(1 - Math.abs(aspect - 1.58) / 0.65)
+  const areaScore = areaRatio < 0.14 ? areaRatio / 0.14 : areaRatio > 0.74 ? (0.9 - areaRatio) / 0.16 : 1
+  const angleScore = rectangleAngleScore(ordered)
+  const centerScore = centerBiasScore(ordered, video)
+  const appearanceScore = scoreWarpedAppearance(video, ordered)
+  return clamp01(areaScore) * 0.18 + aspectScore * 0.2 + angleScore * 0.24 + centerScore * 0.1 + appearanceScore * 0.28
+}
+
+function scoreWarpedAppearance(video, quad) {
+  const warped = warpVideoQuadCanvas(video, quad, 360)
+  if (!warped) return 0.45
+
+  const canvas = document.createElement('canvas')
+  canvas.width = 180
+  canvas.height = 112
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  ctx.drawImage(warped, 0, 0, canvas.width, canvas.height)
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+  let bright = 0
+  let saturated = 0
+  let edgeBandSaturated = 0
+  const total = canvas.width * canvas.height
+
+  for (let y = 0; y < canvas.height; y++) {
+    for (let x = 0; x < canvas.width; x++) {
+      const idx = (y * canvas.width + x) * 4
+      const r = data[idx]
+      const g = data[idx + 1]
+      const b = data[idx + 2]
+      const max = Math.max(r, g, b)
+      const min = Math.min(r, g, b)
+      const sat = max - min
+      if (r + g + b > 450) bright += 1
+      if (sat > 42 && max > 90) saturated += 1
+      if ((x < 34 || x > canvas.width - 35 || y < 24 || y > canvas.height - 25) && sat > 48 && max > 90) {
+        edgeBandSaturated += 1
+      }
+    }
+  }
+
+  const brightScore = clamp01((bright / total - 0.28) / 0.42)
+  const colorScore = clamp01(edgeBandSaturated / 260) * 0.7 + clamp01(saturated / 900) * 0.3
+  return clamp01(brightScore * 0.58 + colorScore * 0.42)
+}
+
+function warpVideoQuad(video, quad, maxSide = 1400, quality = 0.86) {
+  const canvas = warpVideoQuadCanvas(video, quad, maxSide)
+  return canvas ? canvas.toDataURL('image/jpeg', quality) : null
+}
+
+function warpVideoQuadCanvas(video, quad, maxSide = 1400) {
+  if (!window.cv?.Mat || !quad) return null
+  const cv = window.cv
+  const ordered = orderQuad(quad)
+  const topWidth = distance(ordered[0], ordered[1])
+  const bottomWidth = distance(ordered[3], ordered[2])
+  const leftHeight = distance(ordered[0], ordered[3])
+  const rightHeight = distance(ordered[1], ordered[2])
+  let targetWidth = Math.round(Math.max(topWidth, bottomWidth))
+  let targetHeight = Math.round(Math.max(leftHeight, rightHeight))
+  const ratio = Math.min(1, maxSide / Math.max(targetWidth, targetHeight))
+  targetWidth = Math.max(1, Math.round(targetWidth * ratio))
+  targetHeight = Math.max(1, Math.round(targetHeight * ratio))
+
+  fullCanvas.width = video.videoWidth
+  fullCanvas.height = video.videoHeight
+  fullCanvas.getContext('2d').drawImage(video, 0, 0, fullCanvas.width, fullCanvas.height)
+
+  const src = cv.imread(fullCanvas)
+  const dst = new cv.Mat()
+  const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    ordered[0].x, ordered[0].y,
+    ordered[1].x, ordered[1].y,
+    ordered[2].x, ordered[2].y,
+    ordered[3].x, ordered[3].y
+  ])
+  const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    0, 0,
+    targetWidth - 1, 0,
+    targetWidth - 1, targetHeight - 1,
+    0, targetHeight - 1
+  ])
+  const matrix = cv.getPerspectiveTransform(srcTri, dstTri)
+  const outCanvas = document.createElement('canvas')
+  outCanvas.width = targetWidth
+  outCanvas.height = targetHeight
+
+  try {
+    cv.warpPerspective(src, dst, matrix, new cv.Size(targetWidth, targetHeight), cv.INTER_LINEAR, cv.BORDER_REPLICATE)
+    cv.imshow(outCanvas, dst)
+    return outCanvas
+  } catch {
+    return null
+  } finally {
+    src.delete()
+    dst.delete()
+    srcTri.delete()
+    dstTri.delete()
+    matrix.delete()
+  }
+}
+
+async function captureFromCamera(auto = false) {
+  if (isAutoCapturing.value || phase.value !== 'camera') return
+  isAutoCapturing.value = true
+
+  const video = videoRef.value
+  const quad = lastCandidate?.quad && lastCandidate.score >= MIN_SCORE_TO_DRAW ? lastCandidate.quad : null
+  let dataUrl = quad ? warpVideoQuad(video, quad, 1600, 0.88) : null
+
+  if (!dataUrl) {
+    fullCanvas.width = video.videoWidth
+    fullCanvas.height = video.videoHeight
+    fullCanvas.getContext('2d').drawImage(video, 0, 0, fullCanvas.width, fullCanvas.height)
+    dataUrl = fullCanvas.toDataURL('image/jpeg', 0.86)
+  }
+
+  stopCamera()
+  previewUrl.value = dataUrl
+  phase.value = 'scanning'
+
+  const jpegDataUrl = await toJpeg(dataUrl)
+  await recognizeDeed(jpegDataUrl)
+  isAutoCapturing.value = false
+}
+
+function drawOverlay(quad = null, score = 0) {
+  const canvas = overlayRef.value
+  const video = videoRef.value
+  if (!canvas || !video) return
+
+  const rect = canvas.getBoundingClientRect()
+  const dpr = window.devicePixelRatio || 1
+  canvas.width = Math.max(1, Math.round(rect.width * dpr))
+  canvas.height = Math.max(1, Math.round(rect.height * dpr))
+
+  const ctx = canvas.getContext('2d')
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.clearRect(0, 0, rect.width, rect.height)
+
+  if (!quad) return
+
+  const mapped = mapVideoQuadToElement(quad, video, rect.width, rect.height)
+  const locked = stableFrames.value >= STABLE_FRAME_TARGET - 2
+  ctx.lineWidth = locked ? 4 : 3
+  ctx.strokeStyle = locked ? '#34d399' : score >= MIN_SCORE_TO_LOCK ? '#fbbf24' : '#60a5fa'
+  ctx.fillStyle = locked ? 'rgba(52, 211, 153, .12)' : 'rgba(96, 165, 250, .1)'
+  ctx.shadowColor = ctx.strokeStyle
+  ctx.shadowBlur = 12
+
+  ctx.beginPath()
+  ctx.moveTo(mapped[0].x, mapped[0].y)
+  for (let i = 1; i < mapped.length; i++) ctx.lineTo(mapped[i].x, mapped[i].y)
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+
+  ctx.shadowBlur = 0
+  mapped.forEach((p) => {
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2)
+    ctx.fillStyle = '#f8fafc'
+    ctx.fill()
+    ctx.lineWidth = 2
+    ctx.strokeStyle = locked ? '#10b981' : '#2563eb'
+    ctx.stroke()
+  })
+}
+
+function mapVideoQuadToElement(quad, video, width, height) {
+  const videoRatio = video.videoWidth / video.videoHeight
+  const elementRatio = width / height
+  let drawWidth = width
+  let drawHeight = height
+  let offsetX = 0
+  let offsetY = 0
+
+  if (videoRatio > elementRatio) {
+    drawHeight = height
+    drawWidth = height * videoRatio
+    offsetX = (width - drawWidth) / 2
+  } else {
+    drawWidth = width
+    drawHeight = width / videoRatio
+    offsetY = (height - drawHeight) / 2
+  }
+
+  return quad.map((p) => ({
+    x: offsetX + (p.x / video.videoWidth) * drawWidth,
+    y: offsetY + (p.y / video.videoHeight) * drawHeight
+  }))
+}
+
+function isSimilarQuad(a, b, video) {
+  if (!a || !b) return false
+  const diag = Math.hypot(video.videoWidth, video.videoHeight)
+  const avgDelta = a.reduce((sum, p, i) => sum + distance(p, b[i]), 0) / 4
+  return avgDelta / diag < 0.035
+}
+
+function orderQuad(points) {
+  const center = points.reduce((acc, p) => ({ x: acc.x + p.x / points.length, y: acc.y + p.y / points.length }), { x: 0, y: 0 })
+  const sorted = [...points].sort((a, b) => Math.atan2(a.y - center.y, a.x - center.x) - Math.atan2(b.y - center.y, b.x - center.x))
+  const start = sorted.reduce((bestIdx, p, idx) => (p.x + p.y < sorted[bestIdx].x + sorted[bestIdx].y ? idx : bestIdx), 0)
+  return [...sorted.slice(start), ...sorted.slice(0, start)]
+}
+
+function rectangleAngleScore(points) {
+  const scores = []
+  for (let i = 0; i < 4; i++) {
+    const prev = points[(i + 3) % 4]
+    const cur = points[i]
+    const next = points[(i + 1) % 4]
+    const v1 = { x: prev.x - cur.x, y: prev.y - cur.y }
+    const v2 = { x: next.x - cur.x, y: next.y - cur.y }
+    const denom = Math.max(1, Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y))
+    scores.push(1 - Math.min(1, Math.abs((v1.x * v2.x + v1.y * v2.y) / denom) / 0.35))
+  }
+  return scores.reduce((sum, v) => sum + v, 0) / scores.length
+}
+
+function centerBiasScore(points, video) {
+  const center = points.reduce((acc, p) => ({ x: acc.x + p.x / 4, y: acc.y + p.y / 4 }), { x: 0, y: 0 })
+  const dx = Math.abs(center.x / video.videoWidth - 0.5)
+  const dy = Math.abs(center.y / video.videoHeight - 0.5)
+  return clamp01(1 - Math.hypot(dx, dy) / 0.55)
+}
+
+function distance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0))
+}
 
 function onFileSelected(e) {
   const file = e.target.files?.[0]
   if (!file) return
   e.target.value = ''
+  stopCamera()
 
   const reader = new FileReader()
   reader.onload = async (ev) => {
     const dataUrl = ev.target.result
     previewUrl.value = dataUrl
     phase.value = 'scanning'
-    // 转成 JPEG 再发送（小米 API 不接受 PNG）
     const jpegDataUrl = await toJpeg(dataUrl)
     await recognizeDeed(jpegDataUrl)
   }
   reader.readAsDataURL(file)
 }
 
-// 用 canvas 将任意图片转为 JPEG base64，同时限制最长边 ≤ 1600px 减少传输量
 function toJpeg(dataUrl, maxSize = 1600, quality = 0.85) {
   return new Promise((resolve) => {
     const img = new Image()
@@ -217,8 +738,6 @@ function toJpeg(dataUrl, maxSize = 1600, quality = 0.85) {
   })
 }
 
-// ─── 调用后端 OCR 接口 ────────────────────────────────────────────────────────
-
 async function recognizeDeed(dataUrl) {
   try {
     const res = await fetch('/api/ocr/deed', {
@@ -230,10 +749,9 @@ async function recognizeDeed(dataUrl) {
     if (!json.ok) throw new Error(json.error || '识别失败')
 
     const d = json.deed
-    deed.name  = d.name  ?? ''
+    deed.name = d.name ?? ''
     deed.price = d.price ?? null
     deed.buildUnitCost = d.buildUnitCost ?? null
-    // 确保 rents 始终是长度为 6 的数组
     deed.rents = Array.from({ length: 6 }, (_, i) => d.rents?.[i] ?? null)
     phase.value = 'result'
   } catch (err) {
@@ -242,32 +760,62 @@ async function recognizeDeed(dataUrl) {
   }
 }
 
-// ─── 操作 ─────────────────────────────────────────────────────────────────────
-
 function reset() {
+  stopCamera()
   if (previewUrl.value.startsWith('blob:')) URL.revokeObjectURL(previewUrl.value)
   previewUrl.value = ''
+  detectedQuad.value = null
+  stableFrames.value = 0
+  isAutoCapturing.value = false
+  lastQuad = null
+  lastCandidate = null
+  clearError()
+  resetDeed()
+  phase.value = 'idle'
+}
+
+function resetDeed() {
   deed.name = ''
   deed.price = null
   deed.buildUnitCost = null
   deed.rents = [null, null, null, null, null, null]
+}
+
+function clearError() {
   errorMsg.value = ''
-  phase.value = 'idle'
+}
+
+function stopCamera() {
+  cancelAnimationFrame(rafId)
+  rafId = 0
+  if (stream) {
+    stream.getTracks().forEach((track) => track.stop())
+    stream = null
+  }
+  if (videoRef.value) videoRef.value.srcObject = null
+}
+
+function closeModal() {
+  stopCamera()
+  emit('close')
 }
 
 function confirm() {
   emit('deed-confirmed', {
-    name:  deed.name,
+    name: deed.name,
     price: deed.price,
     buildUnitCost: deed.buildUnitCost,
     rents: [...deed.rents]
   })
-  emit('close')
+  closeModal()
 }
+
+onBeforeUnmount(() => {
+  stopCamera()
+})
 </script>
 
 <style scoped>
-/* ── 遮罩 ── */
 .ocr-overlay {
   position: fixed;
   inset: 0;
@@ -280,7 +828,6 @@ function confirm() {
   justify-content: center;
 }
 
-/* ── 底部弹出卡片 ── */
 .ocr-sheet {
   width: 100%;
   max-width: 480px;
@@ -299,7 +846,6 @@ function confirm() {
   to   { transform: translateY(0);    opacity: 1; }
 }
 
-/* ── 标题栏 ── */
 .ocr-header {
   display: flex;
   align-items: center;
@@ -330,7 +876,6 @@ function confirm() {
 }
 .ocr-close:hover { background: rgba(255,255,255,.16); }
 
-/* ── 主体 ── */
 .ocr-body {
   flex: 1;
   overflow-y: auto;
@@ -340,7 +885,6 @@ function confirm() {
   gap: 18px;
 }
 
-/* ── 引导区 ── */
 .guide-area {
   display: flex;
   flex-direction: column;
@@ -363,7 +907,6 @@ function confirm() {
   margin: 0;
 }
 
-/* ── 按钮组 ── */
 .action-btns {
   display: flex;
   flex-direction: column;
@@ -382,7 +925,7 @@ function confirm() {
   font-weight: 700;
   border: 0;
   cursor: pointer;
-  transition: opacity .15s, transform .1s;
+  transition: opacity .15s, transform .1s, background .15s;
   position: relative;
   overflow: hidden;
   -webkit-tap-highlight-color: transparent;
@@ -394,6 +937,10 @@ function confirm() {
 }
 .primary-btn:hover { opacity: .9; }
 .primary-btn:active { transform: scale(.97); }
+.primary-btn:disabled {
+  opacity: .65;
+  cursor: wait;
+}
 .secondary-btn {
   background: rgba(255,255,255,.07);
   color: #cbd5e1;
@@ -418,7 +965,104 @@ function confirm() {
   flex-shrink: 0;
 }
 
-/* ── 扫描中 ── */
+.camera-area {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.camera-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #020617;
+  border: 1px solid rgba(255,255,255,.12);
+}
+.camera-frame--locked {
+  border-color: rgba(52, 211, 153, .85);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, .25), 0 0 22px rgba(16, 185, 129, .25);
+}
+.camera-video,
+.camera-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.camera-video {
+  object-fit: cover;
+  background: #020617;
+}
+.camera-overlay {
+  pointer-events: none;
+}
+.camera-corners {
+  position: absolute;
+  inset: 16px;
+  pointer-events: none;
+}
+.corner {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border-color: rgba(226, 232, 240, .76);
+  border-style: solid;
+}
+.corner-tl { top: 0; left: 0; border-width: 2px 0 0 2px; border-radius: 4px 0 0 0; }
+.corner-tr { top: 0; right: 0; border-width: 2px 2px 0 0; border-radius: 0 4px 0 0; }
+.corner-bl { bottom: 0; left: 0; border-width: 0 0 2px 2px; border-radius: 0 0 0 4px; }
+.corner-br { bottom: 0; right: 0; border-width: 0 2px 2px 0; border-radius: 0 0 4px 0; }
+
+.camera-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 22px;
+  color: #cbd5e1;
+  font-size: 13px;
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #64748b;
+}
+.status-dot--ready {
+  background: #34d399;
+  box-shadow: 0 0 10px rgba(52, 211, 153, .75);
+}
+.lock-meter {
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255,255,255,.08);
+}
+.lock-meter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #38bdf8, #34d399);
+  transition: width .12s ease;
+}
+.camera-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.album-inline {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  color: #a78bfa;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 6px 0 2px;
+  cursor: pointer;
+}
+
 .scanning-area {
   display: flex;
   flex-direction: column;
@@ -459,7 +1103,6 @@ function confirm() {
   margin: 0;
 }
 
-/* ── 识别失败 ── */
 .error-area {
   display: flex;
   flex-direction: column;
@@ -485,14 +1128,13 @@ function confirm() {
   flex-shrink: 0;
 }
 .error-msg {
-  color: #64748b;
+  color: #94a3b8;
   font-size: 12px;
   line-height: 1.55;
   margin: 0;
-  word-break: break-all;
+  word-break: break-word;
 }
 
-/* ── 识别结果 ── */
 .result-area {
   display: flex;
   flex-direction: column;
@@ -512,7 +1154,6 @@ function confirm() {
   display: block;
 }
 
-/* ── 地契信息卡（可编辑） ── */
 .deed-card {
   background: rgba(255,255,255,.04);
   border: 1px solid rgba(255,255,255,.1);
