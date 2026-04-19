@@ -78,6 +78,7 @@ db.exec(`
     rents       TEXT NOT NULL,
     mortgaged   INTEGER NOT NULL DEFAULT 0,
     build_count INTEGER NOT NULL DEFAULT 0,
+    build_unit_cost INTEGER NOT NULL DEFAULT 0,
     build_cost  INTEGER NOT NULL DEFAULT 0,
     created_at  INTEGER NOT NULL
   );
@@ -114,6 +115,7 @@ db.exec(`
 try { db.exec(`ALTER TABLE rooms ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); } catch {}
 try { db.exec(`ALTER TABLE properties ADD COLUMN mortgaged INTEGER NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE properties ADD COLUMN build_count INTEGER NOT NULL DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE properties ADD COLUMN build_unit_cost INTEGER NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE properties ADD COLUMN build_cost INTEGER NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`CREATE TABLE IF NOT EXISTS deposits (id TEXT PRIMARY KEY, player_id TEXT NOT NULL, room_id TEXT NOT NULL, amount INTEGER NOT NULL, created_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'active')`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_deposits_room ON deposits(room_id)`); } catch {}
@@ -167,14 +169,14 @@ const stmts = {
   deletePlayers: db.prepare('DELETE FROM players WHERE room_id = ?'),
   deleteLogs: db.prepare('DELETE FROM logs WHERE room_id = ?'),
   insertProperty: db.prepare(
-    'INSERT INTO properties (id, player_id, room_id, name, price, rents, mortgaged, build_count, build_cost, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?)'
+    'INSERT INTO properties (id, player_id, room_id, name, price, rents, mortgaged, build_count, build_unit_cost, build_cost, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, 0, ?)'
   ),
   getProperties: db.prepare('SELECT * FROM properties WHERE room_id = ? ORDER BY created_at DESC'),
   getPlayerProperties: db.prepare('SELECT * FROM properties WHERE player_id = ? ORDER BY created_at DESC'),
   deleteProperties: db.prepare('DELETE FROM properties WHERE room_id = ?'),
   updatePropertyMortgaged: db.prepare('UPDATE properties SET mortgaged = ? WHERE id = ?'),
   updatePropertyBuild: db.prepare('UPDATE properties SET build_count = ?, build_cost = ? WHERE id = ?'),
-  updatePropertyDetails: db.prepare('UPDATE properties SET name = ?, price = ?, build_cost = ?, rents = ? WHERE id = ?'),
+  updatePropertyDetails: db.prepare('UPDATE properties SET name = ?, price = ?, build_unit_cost = ?, build_cost = ?, rents = ? WHERE id = ?'),
   updatePropertyOwner: db.prepare('UPDATE properties SET player_id = ? WHERE id = ?'),
 
   // deposits
@@ -578,103 +580,13 @@ async function autoAdjustInterestRate(roomId, currentBankBalance) {
   }
 }
 
-// ─── AI 计算贷款利率 ──────────────────────────────────────────────────────────
+// ─── 固定贷款利率 ──────────────────────────────────────────────────────────────
 // 规则：
-//   - 初始/默认利率 = 存款利率 × 3（最低 4.5%）
-//   - 最高不超过 20%（每个计息周期，即每 interestIntervalMin 分钟收一次利息）
-//   - AI 根据玩家资产、债务、银行状况综合评估，给出合理利率
-
-async function calcLoanRate(room, player, loanAmount, existingDebt) {
-  const bankBalance = room.config.bankBalance ?? 0;
-  const { startingMoney, playerCount, interestRate: depositRate = 1.5, interestIntervalMin = 10 } = room.config;
-  const base = (startingMoney ?? 1500) * (playerCount ?? 4);
-  const propertyValue = (room.properties || [])
-    .filter(p => p.player_id === player.id)
-    .reduce((s, p) => s + propertyAssetValue(p), 0);
-  const depositTotal = (room.deposits || [])
-    .filter(d => d.player_id === player.id && d.status === 'active')
-    .reduce((s, d) => s + Number(d.amount || 0), 0);
-  const loanTotal = (room.loans || [])
-    .filter(l => l.player_id === player.id && l.status === 'active')
-    .reduce((s, l) => s + Number(l.remaining || 0), 0);
-  const totalAssets = player.balance + propertyValue + depositTotal - loanTotal;
-
-  // 利率边界：最低为存款利率的 1.5 倍（不低于 depositRate + 1），最高为每周期 20%
-  const minLoanRate = Math.max(depositRate * 1.5, depositRate + 1);
-  const maxLoanRate = 20; // 每个计息周期最高 20%
-
-  // 默认利率 = 存款利率 × 3（即 4.5% 当存款为 1.5%）
-  const defaultRate = Math.min(maxLoanRate, Math.round(depositRate * 3 * 10) / 10);
-
-  const prompt = `你是一个大富翁桌游银行的 AI 行长，需要为一笔贷款申请定价。
-
-游戏规则说明：
-- 贷款利率按"每 ${interestIntervalMin} 分钟"收一次利息（复利计息）
-- 当前存款利率：${depositRate}%（每 ${interestIntervalMin} 分钟）
-- 贷款利率必须高于存款利率，合理范围：${minLoanRate.toFixed(1)}%~${maxLoanRate}%（每 ${interestIntervalMin} 分钟）
-- 默认基准贷款利率：${defaultRate}%（存款利率的 3 倍）
-
-当前经济数据：
-- 银行资金：¥${bankBalance}（基准资金池：¥${Math.round(base)}）
-- 申请玩家：${player.name}
-- 玩家现金：¥${player.balance}
-- 玩家地产价值：¥${propertyValue}
-- 玩家总资产：¥${totalAssets}
-- 玩家已有债务：¥${existingDebt}
-- 本次申请金额：¥${loanAmount}
-- 贷款后总债务：¥${existingDebt + loanAmount}（占总资产 ${totalAssets > 0 ? Math.round((existingDebt + loanAmount) / totalAssets * 100) : '∞'}%）
-
-定价因素（按重要性排序）：
-1. 债务风险：贷款后总债务 / 总资产的比例越高，利率越高
-2. 银行流动性：银行资金越紧张，利率越高以控制信贷规模
-3. 贷款额度：本次贷款金额占总资产比例越大，风险溢价越高
-4. 存款利率：贷款利率需覆盖存款成本并保留利润空间
-
-利率约束（必须严格遵守）：
-- 最低：${minLoanRate.toFixed(1)}%
-- 最高：${maxLoanRate}%
-- 保留 1 位小数
-
-只输出一个 JSON，不要任何解释或 markdown：{"rate": 数字, "reason": "定价理由（20字以内）"}`;
-
-  try {
-    const raw = await chat([{ role: 'user', content: prompt }], {
-      model: DEFAULT_MODEL,
-      temperature: 0.3,
-      max_tokens: 128
-    });
-
-    // 提取 JSON
-    let jsonStr = null;
-    const mdMatch = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-    if (mdMatch) jsonStr = mdMatch[1].trim();
-    else {
-      const si = raw.indexOf('{');
-      if (si !== -1) {
-        let depth = 0, ei = -1;
-        for (let i = si; i < raw.length; i++) {
-          if (raw[i] === '{') depth++;
-          if (raw[i] === '}') { depth--; if (depth === 0) { ei = i; break; } }
-        }
-        if (ei !== -1) jsonStr = raw.slice(si, ei + 1);
-      }
-    }
-
-    const parsed = jsonStr ? JSON.parse(jsonStr) : null;
-    // 严格约束在 [minLoanRate, maxLoanRate] 范围内
-    const rawRate = parsed && parsed.rate > 0 ? Number(parsed.rate) : defaultRate;
-    const loanRate = Math.round(Math.min(maxLoanRate, Math.max(minLoanRate, rawRate)) * 10) / 10;
-    const aiReason = parsed?.reason || 'AI 综合评估';
-    console.log(`[AI loan rate] room ${room.id} player ${player.name}: ${loanRate}% — ${aiReason}`);
-    return { loanRate, aiReason };
-  } catch (e) {
-    console.error('[calcLoanRate] AI error, using fallback:', e.message);
-    // 降级规则：债务比率越高利率越高，但不超过上限
-    const debtRatio = totalAssets > 0 ? (existingDebt + loanAmount) / totalAssets : 1;
-    const riskPremium = debtRatio > 0.7 ? 3 : debtRatio > 0.4 ? 1.5 : 0;
-    const loanRate = Math.round(Math.min(maxLoanRate, Math.max(minLoanRate, defaultRate + riskPremium)) * 10) / 10;
-    return { loanRate, aiReason: 'AI 暂不可用，使用规则定价' };
-  }
+//   - 贷款利率固定为当前银行存款利率的 3 倍
+//   - 贷款利息按每个计息周期直接从玩家现金扣除，不计入剩余本金
+function calcLoanRate(room) {
+  const depositRate = Number(room?.config?.interestRate ?? 1.5);
+  return Math.round(depositRate * 3 * 10) / 10;
 }
 
 function publicRoom(room) {
@@ -777,7 +689,7 @@ const server = http.createServer(async (req, res) => {
 
   // ── 地契 OCR ─────────────────────────────────────────────────────────────────
   // POST /api/ocr/deed  { image: "data:image/jpeg;base64,..." }
-  // 返回: { ok: true, deed: { name, price, rents: [r0,r1,r2,r3,r4,r5] } }
+  // 返回: { ok: true, deed: { name, price, buildUnitCost, rents: [r0,r1,r2,r3,r4,r5] } }
   //   rents[0]=空地过路费, [1-4]=1-4栋房屋, [5]=酒店
   if (req.method === 'POST' && pathname === '/api/ocr/deed') {
     let reqBody;
@@ -798,25 +710,32 @@ const server = http.createServer(async (req, res) => {
           },
           {
             type: 'text',
-            text: `你正在识别一张中文版大富翁（Monopoly）桌游地契卡片。请仔细阅读卡片上的所有文字和数字，然后严格按照以下 JSON 格式输出，不要包含任何解释、注释或 markdown 代码块：
+            text: `你正在识别一张中文版大富翁（Monopoly）桌游地契卡片。现在只重点识别以下 3 类关键信息：
+1. 地契名字
+2. 每层加盖所需金额（通常写作“房屋/楼房每幢”“每层加盖费用”等）
+3. 各档过路费（空地、1 层、2 层、3 层、4 层、酒店）
 
-{"name":"地产名称","price":购入价格数字或null,"rents":[空地过路费,一幢房屋,两幢房屋,三幢房屋,四幢房屋,旅馆]}
+请仔细阅读卡片上的所有文字和数字，然后严格按照以下 JSON 格式输出，不要包含任何解释、注释或 markdown 代码块：
+
+{"name":"地产名称","price":购入价格数字或null,"buildUnitCost":每层加盖费用数字或null,"rents":[空地过路费,一幢房屋,两幢房屋,三幢房屋,四幢房屋,旅馆]}
 
 识别规则：
-1. name：取卡片顶部彩色色块内的地名文字（如"台北路"、"中山路"），原样输出，不要添加任何后缀
+1. name：优先取卡片顶部彩色色块内、最醒目的地名文字（如"台北路"、"中山路"），原样输出，不要添加“路段”“地产”“地契”等后缀，也不要输出颜色或说明文字
 2. price：卡片上标注的购买地产所需金额（整数，单位为游戏币"元"），若卡片未印购买价格则填 null
-3. rents：严格按顺序提取 6 个过路费金额，均为整数，单位为游戏币"元"：
+3. buildUnitCost：提取“每层加盖费用/每幢房屋造价/楼房建筑费”对应的单层金额。只要卡片上表达的是“每加盖一次要多少钱”，都填到这个字段；若无法确认则填 null
+4. rents：严格按顺序提取 6 个过路费金额，均为整数，单位为游戏币"元"：
    - rents[0]：空地（无房屋时的过路费，通常最小）
    - rents[1]：建有 1 幢房屋时的过路费
    - rents[2]：建有 2 幢房屋时的过路费
    - rents[3]：建有 3 幢房屋时的过路费
    - rents[4]：建有 4 幢房屋时的过路费
    - rents[5]：建有旅馆（酒店）时的过路费（通常最大）
-4. 若某个数字模糊或无法确认，填 null
-5. 所有数值只填纯整数，不要包含货币符号或逗号
+5. 名称必须与卡片上的地契名一致；如果卡片上还有其它较大的宣传文字，忽略它们，不要误填到 name
+6. 若某个数字模糊或无法确认，填 null
+7. 所有数值只填纯整数，不要包含货币符号、逗号、单位或中文数字
 
 示例输出（仅格式参考，数字以实际卡片为准）：
-{"name":"台北路","price":60,"rents":[2,10,30,90,160,250]}`
+{"name":"台北路","price":60,"buildUnitCost":50,"rents":[2,10,30,90,160,250]}`
           }
         ]
       }
@@ -856,8 +775,21 @@ const server = http.createServer(async (req, res) => {
       }
 
       const deed = JSON.parse(jsonStr);
+      const normalizedBuildUnitCost = Math.floor(Number(
+        deed.buildUnitCost ??
+        deed.build_unit_cost ??
+        deed.buildCost ??
+        deed.houseCost ??
+        deed.build_cost
+      ));
+      deed.name = String(deed.name || '').trim();
+      deed.price = deed.price == null ? null : (Number.isFinite(Math.floor(Number(deed.price))) ? Math.floor(Number(deed.price)) : null);
+      deed.buildUnitCost = Number.isFinite(normalizedBuildUnitCost) ? normalizedBuildUnitCost : null;
       // 确保 rents 是长度为 6 的数组
-      deed.rents = Array.from({ length: 6 }, (_, i) => deed.rents?.[i] ?? null);
+      deed.rents = Array.from({ length: 6 }, (_, i) => {
+        const value = Math.floor(Number(deed.rents?.[i]));
+        return Number.isFinite(value) ? value : null;
+      });
       return send(res, 200, { ok: true, deed });
     } catch (e) {
       return send(res, 502, { ok: false, error: e.message });
@@ -905,10 +837,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'DELETE' && parts.length === 3) {
       const deleteAll = db.transaction(() => {
         stmts.deleteProperties.run(roomId);
-        stmts.deleteLogs.run(roomId);
-        stmts.deletePlayers.run(roomId);
         db.prepare('DELETE FROM deposits WHERE room_id = ?').run(roomId);
         db.prepare('DELETE FROM loans WHERE room_id = ?').run(roomId);
+        stmts.deleteLogs.run(roomId);
+        stmts.deletePlayers.run(roomId);
         stmts.deleteRoom.run(roomId);
       });
       deleteAll();
@@ -1082,6 +1014,9 @@ const server = http.createServer(async (req, res) => {
         const property = reqBody.property || {};
         const propertyName = String(property.name || '').trim();
         const propertyPrice = Number.isFinite(Number(property.price)) ? Math.floor(Number(property.price)) : amount;
+        const propertyBuildUnitCost = Number.isFinite(Number(property.buildUnitCost))
+          ? Math.max(0, Math.floor(Number(property.buildUnitCost)))
+          : 0;
         const propertyRents = Array.isArray(property.rents)
           ? Array.from({ length: 6 }, (_, i) => {
               const value = Math.floor(Number(property.rents[i] ?? 0));
@@ -1095,6 +1030,7 @@ const server = http.createServer(async (req, res) => {
           propertyName,
           propertyPrice,
           JSON.stringify(propertyRents),
+          propertyBuildUnitCost,
           Date.now()
         );
         addLog(room.id, {
@@ -1181,6 +1117,7 @@ const server = http.createServer(async (req, res) => {
 
         const name = String(reqBody.name || '').trim();
         const price = Math.floor(Number(reqBody.price));
+        const buildUnitCost = Math.floor(Number(reqBody.buildUnitCost));
         const buildCost = Math.floor(Number(reqBody.buildCost));
         const rentsRaw = Array.isArray(reqBody.rents) ? reqBody.rents : [];
         const rents = rentsRaw.map(v => Math.floor(Number(v)));
@@ -1188,18 +1125,18 @@ const server = http.createServer(async (req, res) => {
         if (!name) {
           return send(res, 400, { ok: false, error: 'invalid_property_name' });
         }
-        if (price < 0 || buildCost < 0 || !Number.isFinite(price) || !Number.isFinite(buildCost)) {
+        if (price < 0 || buildUnitCost < 0 || buildCost < 0 || !Number.isFinite(price) || !Number.isFinite(buildUnitCost) || !Number.isFinite(buildCost)) {
           return send(res, 400, { ok: false, error: 'invalid_property_amount' });
         }
         if (rents.length !== 6 || rents.some(v => v < 0 || !Number.isFinite(v))) {
           return send(res, 400, { ok: false, error: 'invalid_property_rents' });
         }
 
-        stmts.updatePropertyDetails.run(name, price, buildCost, JSON.stringify(rents), prop.id);
+        stmts.updatePropertyDetails.run(name, price, buildUnitCost, buildCost, JSON.stringify(rents), prop.id);
         addLog(room.id, {
           type: 'transfer',
           text: `${player.name} 修改了「${prop.name}」的地产信息`,
-          note: `更新名称、购入价、盖房金额和过路费${name !== prop.name ? `（新名称：${name}）` : ''}`
+          note: `更新名称、购入价、每层加盖费用、累计盖房金额和过路费${name !== prop.name ? `（新名称：${name}）` : ''}`
         });
       } else if (reqBody.type === 'sell-property') {
         // 出售地产给玩家或银行
@@ -1473,7 +1410,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, room: updated });
     }
 
-    // ── 贷款：申请（AI 计算利率） ────────────────────────────────────────────────
+    // ── 贷款：申请（固定利率） ──────────────────────────────────────────────────
     // POST /api/rooms/:id/loan  { token, amount }
     if (req.method === 'POST' && parts[3] === 'loan') {
       if (identity.role !== 'player') return send(res, 403, { ok: false, error: 'forbidden' });
@@ -1504,8 +1441,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 400, { ok: false, error: 'exceeds_credit_limit', maxLoan, availableCredit });
       }
 
-      // 调用 AI 计算贷款利率
-      const { loanRate, aiReason } = await calcLoanRate(room, player, loanAmount, existingDebt);
+      const loanRate = calcLoanRate(room);
 
       // 银行发钱给玩家，银行资金减少
       player.balance += loanAmount;
@@ -1517,17 +1453,17 @@ const server = http.createServer(async (req, res) => {
 
       // 创建贷款记录
       const loanId = `loan_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-      stmts.insertLoan.run(loanId, player.id, roomId, loanAmount, loanAmount, loanRate, Date.now(), 'active', aiReason);
+      stmts.insertLoan.run(loanId, player.id, roomId, loanAmount, loanAmount, loanRate, Date.now(), 'active', '');
 
       addLog(roomId, {
         type: 'loan',
-        text: `${player.name} 贷款 ¥${loanAmount}，AI 利率 ${loanRate}%（${aiReason.slice(0, 40)}）`,
+        text: `${player.name} 贷款 ¥${loanAmount}，固定利率 ${loanRate}%`,
         note: '贷款'
       });
 
       const updated = publicRoom(getRoom(roomId));
       broadcastRoom(roomId, { type: 'room_update', room: updated });
-      return send(res, 200, { ok: true, room: updated, loanRate, aiReason });
+      return send(res, 200, { ok: true, room: updated, loanRate });
     }
 
     // ── 贷款：还款 ──────────────────────────────────────────────────────────────
@@ -1572,25 +1508,6 @@ const server = http.createServer(async (req, res) => {
       const updated = publicRoom(getRoom(roomId));
       broadcastRoom(roomId, { type: 'room_update', room: updated });
       return send(res, 200, { ok: true, room: updated });
-    }
-
-    // ── AI 贷款利率预估 ─────────────────────────────────────────────────────────
-    // POST /api/rooms/:id/loan-rate-preview  { token, amount }
-    if (req.method === 'POST' && parts[3] === 'loan-rate-preview') {
-      if (identity.role !== 'player') return send(res, 403, { ok: false, error: 'forbidden' });
-      const player = room.players.find(p => p.id === identity.player.id);
-      if (!player) return send(res, 404, { ok: false, error: 'player_not_found' });
-      const loanAmount = Math.floor(Number(reqBody.amount || 0));
-
-      const existingLoans = (room.loans || []).filter(l => l.player_id === player.id);
-      const existingDebt = existingLoans.reduce((s, l) => s + l.remaining, 0);
-
-      try {
-        const { loanRate, aiReason } = await calcLoanRate(room, player, loanAmount, existingDebt);
-        return send(res, 200, { ok: true, loanRate, aiReason });
-      } catch (e) {
-        return send(res, 502, { ok: false, error: e.message });
-      }
     }
 
     if (req.method === 'POST' && parts[3] === 'update-config') {
@@ -1819,20 +1736,21 @@ setInterval(() => {
           }
         }
 
-        // 3. 贷款利息结算：每笔贷款按各自利率增加欠款，银行收息（增加资金）
+        // 3. 贷款利息结算：每笔贷款按各自利率直接从玩家现金扣除，银行收息（增加资金）
         const activeLoans = stmts.getLoans.all(roomId, 'active');
         for (const loan of activeLoans) {
           const loanInterest = Math.round(loan.remaining * (loan.rate / 100));
           if (loanInterest <= 0) continue;
-          const newRemaining = loan.remaining + loanInterest;
-          stmts.updateLoanRemaining.run(newRemaining, loan.id);
-          bankBalance += loanInterest;
-          hasChanges = true;
           const loanPlayer = room.players.find(p => p.id === loan.player_id);
           if (loanPlayer) {
+            const prevBalance = Number(loanPlayer.balance || 0);
+            loanPlayer.balance = prevBalance - loanInterest;
+            persistPlayer(loanPlayer);
+            bankBalance += loanInterest;
+            hasChanges = true;
             addLog(roomId, {
               type: 'loan-interest',
-              text: `${loanPlayer.name} 贷款计息 +¥${loanInterest}（欠款 ¥${loan.remaining} → ¥${newRemaining}，利率 ${loan.rate}%）`,
+              text: `${loanPlayer.name} 贷款利息 -¥${loanInterest}（现金 ¥${prevBalance} → ¥${loanPlayer.balance}，剩余本金 ¥${loan.remaining}，利率 ${loan.rate}%）`,
               note: '贷款计息'
             });
           }

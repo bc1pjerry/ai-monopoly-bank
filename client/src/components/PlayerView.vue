@@ -127,6 +127,22 @@
               </button>
               <button class="deed-clear-btn" type="button" @click="clearRecognizedDeed">清空</button>
             </div>
+            <div v-if="recognizedDeed" class="deed-manual-card">
+              <div class="sd-info-group">
+                <div class="sd-price-row">
+                  <span class="sd-price-label">地契名称</span>
+                  <span class="sd-price-val">{{ recognizedDeed.name || '未识别' }}</span>
+                </div>
+                <div class="sd-price-row">
+                  <span class="sd-price-label">购入价格</span>
+                  <span class="sd-price-val">{{ recognizedDeed.price != null ? `¥${fmt(recognizedDeed.price)}` : '—' }}</span>
+                </div>
+                <div class="sd-price-row">
+                  <span class="sd-price-label">每层加盖费用</span>
+                  <span class="sd-price-val">{{ recognizedDeed.buildUnitCost != null ? `¥${fmt(recognizedDeed.buildUnitCost)}` : '—' }}</span>
+                </div>
+              </div>
+            </div>
           </div>
           <div v-if="fineType === 'build'" class="deed-entry">
             <button class="deed-scan-btn build-pick-btn" @click="showBuildPicker = true">
@@ -154,7 +170,7 @@
               </div>
               <div v-else class="build-count-full">这块地产已经建满，无法继续加盖</div>
               <div v-if="buildUnitCost > 0 && buildMaxCount > 0" class="build-count-total">
-                预计盖房金额 ¥{{ fmt(buildTotalCost) }}
+                每层 ¥{{ fmt(buildUnitCost) }}，本次共 ¥{{ fmt(buildTotalCost) }}
               </div>
             </div>
           </div>
@@ -398,17 +414,10 @@
             <!-- 贷款申请 -->
             <div class="loan-input-card">
               <div class="loan-input-label">申请金额</div>
+              <div class="loan-interest-hint">固定利率 {{ fixedLoanRate }}%/期，为存款利率的 3 倍；每期利息会直接从现金扣除，不累计到剩余本金</div>
               <NumPad v-model="loanAmount" />
-              <div class="loan-rate-preview" v-if="loanAmount > 0">
-                <div v-if="loanRateLoading" class="loan-rate-loading">AI 评估中...</div>
-                <div v-else-if="previewRate !== null" class="loan-rate-result">
-                  <span class="loan-rate-num">{{ previewRate }}%</span>
-                  <span class="loan-rate-reason">{{ previewReason }}</span>
-                </div>
-                <button class="loan-rate-btn" v-if="!loanRateLoading && loanAmount > 0" @click="previewLoanRate">获取 AI 利率评估</button>
-              </div>
               <button class="loan-btn" :disabled="!(loanAmount > 0) || loanLoading || myAvailableCredit <= 0" @click="submitLoan">
-                {{ loanLoading ? 'AI 计算中...' : '申请贷款' }}
+                {{ loanLoading ? '处理中...' : '申请贷款' }}
               </button>
             </div>
 
@@ -423,7 +432,6 @@
               <div class="loan-item-remaining">
                 剩余 <span class="loan-remaining-val">¥{{ fmt(loan.remaining) }}</span>
               </div>
-              <div class="loan-item-reason" v-if="loan.ai_reason">{{ loan.ai_reason }}</div>
               <div class="loan-repay-row">
                 <input class="loan-repay-input" type="number" min="1" :max="loan.remaining" v-model.number="repayAmounts[loan.id]" placeholder="还款金额" />
                 <button class="loan-repay-btn" @click="submitRepay(loan)">还款</button>
@@ -608,7 +616,11 @@
                   <span class="sd-price-val">{{ propertyLevelLabel(deedDetailProp) }}</span>
                 </div>
                 <div class="sd-price-row">
-                  <span class="sd-price-label">盖房金额</span>
+                  <span class="sd-price-label">每层加盖费用</span>
+                  <span class="sd-price-val">¥{{ fmt(buildUnitCostForProperty(deedDetailProp)) }}</span>
+                </div>
+                <div class="sd-price-row">
+                  <span class="sd-price-label">已累计加盖金额</span>
                   <span class="sd-price-val">¥{{ fmt(Number(deedDetailProp.build_cost || 0)) }}</span>
                 </div>
               </div>
@@ -742,7 +754,12 @@
                 </label>
 
                 <label class="sd-edit-field">
-                  <span class="sd-edit-label">盖楼总费用</span>
+                  <span class="sd-edit-label">每层加盖费用</span>
+                  <input class="sd-edit-input" type="number" min="0" step="1" v-model.number="editDeedBuildUnitCost" placeholder="输入每层加盖费用" />
+                </label>
+
+                <label class="sd-edit-field">
+                  <span class="sd-edit-label">已累计加盖金额</span>
                   <input class="sd-edit-input" type="number" min="0" step="1" v-model.number="editDeedBuildCost" placeholder="输入已花费盖楼金额" />
                 </label>
 
@@ -1185,6 +1202,15 @@ function parsedRents(prop) {
   } catch { return Array(6).fill(null) }
 }
 
+function buildUnitCostForProperty(prop) {
+  const stored = Math.floor(Number(prop?.build_unit_cost));
+  if (Number.isFinite(stored) && stored > 0) return stored
+  const buildCount = Number(prop?.build_count || 0)
+  const buildCost = Number(prop?.build_cost || 0)
+  if (buildCount > 0 && buildCost > 0) return Math.floor(buildCost / buildCount)
+  return 0
+}
+
 function propertyLevelLabel(prop) {
   const buildCount = Number(prop?.build_count || 0)
   if (buildCount <= 0) return '未建房'
@@ -1270,6 +1296,7 @@ const sellAmount = ref(null)
 const sellLoading = ref(false)
 const propertySaleDecisionLoading = ref('')
 const editDeedPrice = ref(null)
+const editDeedBuildUnitCost = ref(null)
 const editDeedBuildCost = ref(null)
 const editDeedRents = ref(Array(6).fill(null))
 const editDeedLoading = ref(false)
@@ -1291,6 +1318,7 @@ function hasPendingSaleForCurrentProperty() {
 function resetEditDeedForm(prop) {
   if (!prop) {
     editDeedPrice.value = null
+    editDeedBuildUnitCost.value = null
     editDeedBuildCost.value = null
     editDeedRents.value = Array(6).fill(null)
     editDeedLoading.value = false
@@ -1299,6 +1327,7 @@ function resetEditDeedForm(prop) {
   }
   editDeedName.value = String(prop.name || '')
   editDeedPrice.value = Number(prop.price || 0)
+  editDeedBuildUnitCost.value = buildUnitCostForProperty(prop)
   editDeedBuildCost.value = Number(prop.build_cost || 0)
   editDeedRents.value = parsedRents(prop).map(v => (v == null ? 0 : Number(v)))
   editDeedLoading.value = false
@@ -1327,12 +1356,13 @@ async function submitEditDeed() {
   const name = editDeedName.value.trim()
 
   const price = normalizeWholeAmount(editDeedPrice.value)
+  const buildUnitCost = normalizeWholeAmount(editDeedBuildUnitCost.value)
   const buildCost = normalizeWholeAmount(editDeedBuildCost.value)
   const rents = editDeedRents.value.map(normalizeWholeAmount)
 
   if (!name) return alert('请输入地产名称')
-  if (price < 0 || buildCost < 0 || !Number.isFinite(price) || !Number.isFinite(buildCost)) {
-    return alert('请输入正确的购入价格和盖楼费用')
+  if (price < 0 || buildUnitCost < 0 || buildCost < 0 || !Number.isFinite(price) || !Number.isFinite(buildUnitCost) || !Number.isFinite(buildCost)) {
+    return alert('请输入正确的购入价格、每层加盖费用和累计加盖金额')
   }
   if (rents.length !== 6 || rents.some(v => v < 0 || !Number.isFinite(v))) {
     return alert('请填写 6 档非负整数过路费')
@@ -1343,7 +1373,7 @@ async function submitEditDeed() {
     const propId = deedDetailProp.value.id
     const res = await apiWithToken(`/api/rooms/${props.room.id}/action`, props.myToken, {
       method: 'POST',
-      body: { type: 'update-property', propertyId: propId, name, price, buildCost, rents }
+      body: { type: 'update-property', propertyId: propId, name, price, buildUnitCost, buildCost, rents }
     })
     const updatedProp = (res.room.properties || []).find(p => p.id === propId) || null
     deedDetailProp.value = updatedProp
@@ -1563,8 +1593,7 @@ function selectBuildProp(prop) {
 
 const buildUnitCost = computed(() => {
   if (!buildTargetProp.value) return 0
-  const rents = parsedRents(buildTargetProp.value)
-  return Number(rents[1] || 0)
+  return buildUnitCostForProperty(buildTargetProp.value)
 })
 
 const buildMaxCount = computed(() => {
@@ -1598,9 +1627,12 @@ function setBuildCount(count) {
 
 // 获取建房参考金额列表（rents[1..5] 去掉 null）
 function getBuildRentHints(prop) {
-  const rents = parsedRents(prop)
-  // 展示 1~4 栋房费用作为参考，最多 3 个
-  return rents.slice(1, 5).filter(v => v != null).slice(0, 3).map(v => `¥${fmt(v)}`)
+  const unit = buildUnitCostForProperty(prop)
+  const current = currentRent(prop)
+  return [
+    unit > 0 ? `每层 ¥${fmt(unit)}` : null,
+    current != null ? `${currentRentLabel(prop)} ¥${fmt(current)}` : null
+  ].filter(Boolean)
 }
 
 // 建房快捷金额（根据选中地块的 rents 推断）
@@ -1617,6 +1649,7 @@ function onDeedConfirmed(deed) {
   if (deedOcrTarget.value === 'edit') {
     editDeedName.value = deed.name?.trim?.() || editDeedName.value
     editDeedPrice.value = deed.price ?? editDeedPrice.value
+    editDeedBuildUnitCost.value = deed.buildUnitCost ?? editDeedBuildUnitCost.value
     editDeedRents.value = Array.from({ length: 6 }, (_, i) => deed.rents?.[i] ?? editDeedRents.value[i] ?? null)
   } else {
     recognizedDeed.value = deed
@@ -1760,6 +1793,7 @@ async function submitFine() {
         ? {
             name: recognizedDeed.value.name?.trim?.() || '',
             price: propertyPrice,
+            buildUnitCost: normalizeWholeAmount(recognizedDeed.value.buildUnitCost ?? 0),
             rents: normalizedRents(recognizedDeed.value.rents, 0)
           }
         : null
@@ -1857,30 +1891,13 @@ async function submitWithdraw(dep) {
 // ─── 贷款 ─────────────────────────────────────────────────────────────────────
 const loanAmount = ref(null)
 const loanLoading = ref(false)
-const loanRateLoading = ref(false)
-const previewRate = ref(null)
-const previewReason = ref('')
 const repayAmounts = ref({})
 
 const myAvailableCredit = computed(() => {
   const maxLoan = Math.floor(myTotalAssets.value / 2)
   return Math.max(0, maxLoan - myTotalDebt.value)
 })
-
-async function previewLoanRate() {
-  if (!(loanAmount.value > 0)) return
-  loanRateLoading.value = true
-  previewRate.value = null
-  try {
-    const res = await apiWithToken(`/api/rooms/${props.room.id}/loan-rate-preview`, props.myToken, {
-      method: 'POST',
-      body: { amount: loanAmount.value }
-    })
-    previewRate.value = res.loanRate
-    previewReason.value = res.aiReason
-  } catch (e) { previewRate.value = null }
-  finally { loanRateLoading.value = false }
-}
+const fixedLoanRate = computed(() => Math.round(Number(props.room.config.interestRate ?? 1.5) * 3 * 10) / 10)
 
 async function submitLoan() {
   if (!(loanAmount.value > 0)) return alert('请输入贷款金额')
@@ -1892,9 +1909,8 @@ async function submitLoan() {
       body: { amount: loanAmount.value }
     })
     emit('room-updated', res.room)
-    alert(`贷款成功！AI 利率：${res.loanRate}%\n${res.aiReason}`)
+    alert(`贷款成功！固定利率：${res.loanRate}%`)
     loanAmount.value = null
-    previewRate.value = null
   } catch (e) { alert('贷款失败：' + (e.code === 'exceeds_credit_limit' ? '超出可贷额度' : e.message)) }
   finally { loanLoading.value = false }
 }
@@ -3758,52 +3774,11 @@ async function submitRepay(loan) {
   font-weight: 700;
   color: #a7b0cf;
 }
-
-.loan-rate-preview {
-  background: rgba(124,58,237,.08);
-  border: 1px solid rgba(124,58,237,.25);
-  border-radius: 12px;
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.loan-rate-loading {
-  font-size: 13px;
-  color: #a78bfa;
-  text-align: center;
-  font-style: italic;
-}
-.loan-rate-result {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.loan-rate-num {
-  font-size: 22px;
-  font-weight: 900;
-  color: #c4b5fd;
-  letter-spacing: -.02em;
-}
-.loan-rate-reason {
+.loan-interest-hint {
   font-size: 12px;
-  color: #7c6faa;
+  color: #7c86aa;
   line-height: 1.5;
 }
-.loan-rate-btn {
-  padding: 8px 14px;
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  border: 1px solid rgba(124,58,237,.4);
-  background: rgba(124,58,237,.14);
-  color: #c4b5fd;
-  align-self: flex-start;
-  transition: background .15s;
-  -webkit-tap-highlight-color: transparent;
-}
-.loan-rate-btn:hover { background: rgba(124,58,237,.25); }
 
 .loan-btn {
   width: 100%;
@@ -3873,15 +3848,6 @@ async function submitRepay(loan) {
   font-weight: 900;
   color: #f87171;
   letter-spacing: -.02em;
-}
-.loan-item-reason {
-  font-size: 12px;
-  color: #64748b;
-  font-style: italic;
-  line-height: 1.5;
-  padding: 6px 10px;
-  background: rgba(255,255,255,.04);
-  border-radius: 8px;
 }
 .loan-repay-row {
   display: flex;

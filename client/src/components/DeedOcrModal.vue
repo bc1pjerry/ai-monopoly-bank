@@ -23,7 +23,7 @@
                 <circle cx="52" cy="23" r="3" fill="currentColor" fill-opacity="0.5"/>
               </svg>
             </div>
-            <p class="guide-tip">拍摄地契卡片，AI 将自动识别<br/>地产名称、购入价格及各级过路费</p>
+            <p class="guide-tip">拍摄地契卡片，AI 将自动识别<br/>地产名称、每层加盖费用及各档过路费</p>
           </div>
 
           <div class="action-btns">
@@ -119,6 +119,19 @@
                   />
                 </div>
               </div>
+              <div class="deed-row">
+                <span class="deed-label">每层加盖费用</span>
+                <div class="deed-price-wrap">
+                  <span class="deed-currency">¥</span>
+                  <input
+                    v-model.number="deed.buildUnitCost"
+                    class="deed-input deed-input-num"
+                    type="number"
+                    placeholder="—"
+                    min="0"
+                  />
+                </div>
+              </div>
               <div class="deed-divider"></div>
               <div class="deed-row" v-for="(label, i) in rentLabels" :key="i">
                 <span class="deed-label">{{ label }}</span>
@@ -156,11 +169,12 @@ const phase = ref('idle')        // 'idle' | 'scanning' | 'error' | 'result'
 const previewUrl = ref('')
 const errorMsg = ref('')
 
-const rentLabels = ['空地过路费', '1 栋房屋', '2 栋房屋', '3 栋房屋', '4 栋房屋', '酒店']
+const rentLabels = ['空地过路费', '1 栋过路费', '2 栋过路费', '3 栋过路费', '4 栋过路费', '酒店过路费']
 
 const deed = reactive({
   name: '',
   price: null,
+  buildUnitCost: null,
   rents: [null, null, null, null, null, null]
 })
 
@@ -218,6 +232,7 @@ async function recognizeDeed(dataUrl) {
     const d = json.deed
     deed.name  = d.name  ?? ''
     deed.price = d.price ?? null
+    deed.buildUnitCost = d.buildUnitCost ?? null
     // 确保 rents 始终是长度为 6 的数组
     deed.rents = Array.from({ length: 6 }, (_, i) => d.rents?.[i] ?? null)
     phase.value = 'result'
@@ -234,6 +249,7 @@ function reset() {
   previewUrl.value = ''
   deed.name = ''
   deed.price = null
+  deed.buildUnitCost = null
   deed.rents = [null, null, null, null, null, null]
   errorMsg.value = ''
   phase.value = 'idle'
@@ -243,6 +259,7 @@ function confirm() {
   emit('deed-confirmed', {
     name:  deed.name,
     price: deed.price,
+    buildUnitCost: deed.buildUnitCost,
     rents: [...deed.rents]
   })
   emit('close')
