@@ -13,11 +13,11 @@
           <div class="mb-kpi-label">玩家</div>
           <div class="mb-kpi-val">{{ room.players.length }}</div>
         </div>
-        <div class="mb-kpi">
+        <div class="mb-kpi span-2">
           <div class="mb-kpi-label">总余额</div>
           <div class="mb-kpi-val" style="color:#34d399;">¥{{ fmt(totalBalance) }}</div>
         </div>
-        <div class="mb-kpi">
+        <div class="mb-kpi span-2">
           <div class="mb-kpi-label">
             银行资金
             <span class="mb-interest-rate">{{ room.config.interestRate ?? 1.5 }}%</span>
@@ -25,7 +25,7 @@
           <div class="mb-kpi-val" :style="{ color: (room.config.bankBalance ?? 0) >= 0 ? '#34d399' : '#f87171' }">¥{{ fmt(room.config.bankBalance ?? 0) }}</div>
           <div class="mb-interest-countdown" :class="mbInterestCountdownSecs <= 60 ? 'mb-interest-countdown--soon' : ''">{{ mbInterestCountdownLabel }}</div>
         </div>
-        <div class="mb-kpi">
+        <div class="mb-kpi span-2">
           <div class="mb-kpi-label">总存款</div>
           <div class="mb-kpi-val" style="color:#2dd4bf;">¥{{ fmt(totalDeposits) }}</div>
           <div class="mb-kpi-sub">{{ activeDepositCount }} 笔</div>
@@ -446,18 +446,20 @@ async function endGame() {
 
 /* ══ 头部 ══ */
 .mb-header {
-  background: rgba(124,58,237,.18);
-  border: 1px solid rgba(124,58,237,.3);
-  border-radius: 0 0 22px 22px;
-  padding: 16px 20px 18px;
+  background: linear-gradient(180deg, rgba(46, 26, 82, 0.6) 0%, rgba(20, 16, 38, 0.4) 100%);
+  border: 1px solid rgba(124,58,237,.15);
+  border-top: none;
+  border-radius: 0 0 28px 28px;
+  padding: 16px 20px 20px;
   margin-bottom: 0;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.2);
 }
 
 .mb-header-top {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .mb-title {
@@ -468,77 +470,91 @@ async function endGame() {
 
 .mb-room {
   font-size: 12px;
-  color: #a78bfa;
-  background: rgba(124,58,237,.25);
-  padding: 2px 10px;
+  color: #c4b5fd;
+  background: rgba(124,58,237,.2);
+  padding: 4px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(124,58,237,.4);
+  border: 1px solid rgba(124,58,237,.3);
+  font-weight: 600;
 }
 
 .mb-timer {
-  font-size: 44px;
+  font-size: 56px;
   font-weight: 900;
   font-variant-numeric: tabular-nums;
-  letter-spacing: .04em;
-  color: #ede9fe;
+  letter-spacing: .06em;
+  color: #fff;
   line-height: 1;
   text-align: center;
-  margin-bottom: 14px;
+  margin-bottom: 18px;
+  text-shadow: 0 4px 12px rgba(0,0,0,0.3);
 }
 
 .mb-kpi-row {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
+  grid-auto-rows: minmax(0, 1fr);
   gap: 10px;
 }
 
 .mb-kpi {
-  background: rgba(255,255,255,.06);
-  border: 1px solid rgba(255,255,255,.1);
-  border-radius: 12px;
-  padding: 10px 12px;
-  text-align: center;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 14px;
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.mb-kpi.span-2 {
+  grid-row: span 2;
 }
 
 .mb-kpi-label {
   font-size: 11px;
   color: #a7b0cf;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
+  text-align: center;
 }
 
 .mb-interest-rate {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   color: #34d399;
   background: rgba(52,211,153,.15);
   border: 1px solid rgba(52,211,153,.3);
   border-radius: 5px;
-  padding: 0 4px;
-  line-height: 1.5;
+  padding: 1px 4px;
+  line-height: 1.2;
 }
 
 .mb-kpi-val {
   font-size: 18px;
   font-weight: 800;
   color: #eef2ff;
+  text-align: center;
 }
 
 .mb-interest-countdown {
   font-size: 10px;
   color: #a7b0cf;
   font-variant-numeric: tabular-nums;
-  margin-top: 2px;
+  margin-top: 4px;
   letter-spacing: .03em;
+  text-align: center;
 }
 
 .mb-kpi-sub {
   font-size: 10px;
   color: #64748b;
-  margin-top: 2px;
+  margin-top: 4px;
+  text-align: center;
 }
 
 .mb-interest-countdown--soon {
@@ -588,101 +604,110 @@ async function endGame() {
 
 /* ══ 玩家卡片 ══ */
 .mb-player-card {
-  background: rgba(255,255,255,.06);
-  border: 1px solid rgba(255,255,255,.1);
-  border-radius: 16px;
-  padding: 14px;
+  background: #151a26;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 20px;
+  padding: 18px 20px;
+  position: relative;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
 }
 
 .mb-pc-top {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .mb-pc-name {
-  font-size: 16px;
-  font-weight: 700;
-  color: #eef2ff;
+  font-size: 17px;
+  font-weight: 800;
+  color: #f1f5f9;
 }
 
 .mb-pc-delta {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 10px;
 }
 .mb-pc-delta.pos { background: rgba(16,185,129,.2); color: #6ee7b7; }
-.mb-pc-delta.neg { background: rgba(239,68,68,.18); color: #fca5a5; }
+.mb-pc-delta.neg { background: rgba(239,68,68,.2); color: #fca5a5; }
 .mb-pc-delta.neu { background: rgba(255,255,255,.08); color: #a7b0cf; }
 
 .mb-pc-balance {
-  font-size: 30px;
+  font-size: 38px;
   font-weight: 900;
   letter-spacing: -.03em;
-  color: #eef2ff;
-  margin: 8px 0 4px;
+  color: #fff;
+  margin: 6px 0 10px;
 }
 
 .mb-pc-assets-row {
   display: flex;
   align-items: center;
-  gap: 5px;
-  margin-bottom: 10px;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #94a3b8;
 }
 
 .mb-pc-assets-label {
-  font-size: 11px;
-  color: #a7b0cf;
+  color: #94a3b8;
   font-weight: 600;
 }
 
 .mb-pc-assets-val {
-  font-size: 13px;
   font-weight: 700;
   color: #a78bfa;
 }
 
 .mb-pc-assets-breakdown {
-  font-size: 11px;
   color: #6d5fb5;
 }
 
 .mb-pc-prop-row {
   display: flex;
   align-items: center;
-  gap: 5px;
-  margin-bottom: 10px;
-  margin-top: -6px;
+  gap: 6px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: #94a3b8;
 }
 
 .mb-pc-prop-label {
-  font-size: 11px;
-  color: #a7b0cf;
+  color: #94a3b8;
   font-weight: 600;
 }
 
 .mb-pc-prop-val {
-  font-size: 13px;
   font-weight: 700;
   color: #fbbf24;
 }
 
 .mb-pc-actions {
   display: flex;
-  gap: 8px;
+  gap: 12px;
 }
 
 .mb-action-btn {
   flex: 1;
-  padding: 10px 0;
-  border-radius: 12px;
-  font-size: 14px;
-  font-weight: 700;
+  padding: 14px 0;
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 800;
   cursor: pointer;
-  border: 1px solid transparent;
+  border: none;
   transition: .15s ease;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+.mb-action-btn.green-btn {
+  background: #18372d;
+  color: #a7f3d0;
+}
+.mb-action-btn.red-btn {
+  background: #3f2228;
+  color: #fecaca;
 }
 .mb-action-btn:active { transform: scale(.96); }
 
