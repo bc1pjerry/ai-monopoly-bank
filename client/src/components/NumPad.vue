@@ -17,37 +17,38 @@
                 <span class="numpad-currency">¥</span>
                 <span class="numpad-value">{{ formattedDisplay }}</span>
               </div>
-              <button class="numpad-confirm" @click="confirm">确认</button>
+              <button type="button" class="numpad-confirm" @click="confirm">确认</button>
             </div>
 
             <!-- 快捷金额 -->
             <div v-if="quickAmounts.length" class="numpad-quick">
               <button
+                type="button"
                 v-for="v in quickAmounts"
                 :key="v"
                 class="numpad-quick-btn"
                 :class="{ active: numericValue === v }"
-                @click="setAmount(v)"
+                @pointerdown="setAmount(v)"
               >{{ v }}</button>
             </div>
 
             <!-- 数字键盘 -->
             <div class="numpad-grid">
-              <button class="numpad-key" @click="press('1')">1</button>
-              <button class="numpad-key" @click="press('2')">2</button>
-              <button class="numpad-key" @click="press('3')">3</button>
+              <button type="button" class="numpad-key" @pointerdown="press('1')">1</button>
+              <button type="button" class="numpad-key" @pointerdown="press('2')">2</button>
+              <button type="button" class="numpad-key" @pointerdown="press('3')">3</button>
 
-              <button class="numpad-key" @click="press('4')">4</button>
-              <button class="numpad-key" @click="press('5')">5</button>
-              <button class="numpad-key" @click="press('6')">6</button>
+              <button type="button" class="numpad-key" @pointerdown="press('4')">4</button>
+              <button type="button" class="numpad-key" @pointerdown="press('5')">5</button>
+              <button type="button" class="numpad-key" @pointerdown="press('6')">6</button>
 
-              <button class="numpad-key" @click="press('7')">7</button>
-              <button class="numpad-key" @click="press('8')">8</button>
-              <button class="numpad-key" @click="press('9')">9</button>
+              <button type="button" class="numpad-key" @pointerdown="press('7')">7</button>
+              <button type="button" class="numpad-key" @pointerdown="press('8')">8</button>
+              <button type="button" class="numpad-key" @pointerdown="press('9')">9</button>
 
-              <button class="numpad-key numpad-clear" @click="clear">清空</button>
-              <button class="numpad-key" @click="press('0')">0</button>
-              <button class="numpad-key numpad-del" @click="del">⌫</button>
+              <button type="button" class="numpad-key numpad-clear" @pointerdown="clear">清空</button>
+              <button type="button" class="numpad-key" @pointerdown="press('0')">0</button>
+              <button type="button" class="numpad-key numpad-del" @pointerdown="del">⌫</button>
             </div>
 
           </div>
@@ -158,6 +159,7 @@ function setAmount(v) {
 }
 .numpad-display.trigger {
   cursor: pointer;
+  touch-action: manipulation;
 }
 .numpad-display.trigger:active {
   transform: scale(0.98);
@@ -245,6 +247,7 @@ function setAmount(v) {
   cursor: pointer;
   transition: background 0.2s, transform 0.1s;
   user-select: none;
+  touch-action: manipulation;
 }
 .numpad-confirm:active {
   background: #6d28d9;
@@ -269,6 +272,7 @@ function setAmount(v) {
   transition: background .12s, transform .1s;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+  touch-action: none;
 }
 .numpad-key:hover {
   background: rgba(255,255,255,.14);
@@ -313,6 +317,7 @@ function setAmount(v) {
   transition: background .12s, color .12s, border-color .12s;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+  touch-action: none;
 }
 .numpad-quick-btn:hover {
   background: rgba(124,58,237,.18);
