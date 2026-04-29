@@ -11,6 +11,7 @@ const { WebSocketServer } = require('ws');
 const { createAiHandler, chat, DEFAULT_MODEL } = require('./ai');
 const { AVATAR_COUNT, avatarFilePath, avatarPath, normalizeAvatarId } = require('./avatar');
 const { applyDeposit, applyInterest, applyWithdrawal, normalizeDepositAccount } = require('./depositAccount');
+const { shouldAutoAdjustInterestRate } = require('./interestAdjustmentPolicy');
 
 function getLocalIP() {
   const nets = os.networkInterfaces();
@@ -656,7 +657,7 @@ function markPlayerJoined(roomId, playerId) {
 
 // ─── AI 调整存款利率 ──────────────────────────────────────────────────────────
 // 规则：初始利率 1.5%，最高不超过 100%
-// 每次存款、取款、还款、计息后触发，由 AI 根据经济形势给出新利率
+// 只在计息周期完成后触发；普通存款、取款、还款不改变当前倒计时周期的利率
 
 async function autoAdjustInterestRate(roomId, currentBankBalance) {
   try {
@@ -1633,9 +1634,6 @@ const requestHandler = async (req, res) => {
         note: `累计利息 ¥${nextAccount.interest_earned}`
       });
 
-      // 存款后检查是否需要自动调整利率
-      autoAdjustInterestRate(roomId, newBankBalanceDep);
-
       const updated = publicRoom(getRoom(roomId));
       broadcastRoom(roomId, { type: 'room_update', room: updated });
       return send(res, 200, { ok: true, room: updated });
@@ -1677,9 +1675,6 @@ const requestHandler = async (req, res) => {
         text: `${player.name} 取出存款 ¥${withdrawal.withdrawn}，剩余存款 ¥${withdrawal.amount}`,
         note: `累计利息 ¥${withdrawal.interest_earned}`
       });
-
-      // 取款后检查利率
-      autoAdjustInterestRate(roomId, newBankBalanceWd);
 
       const updated = publicRoom(getRoom(roomId));
       broadcastRoom(roomId, { type: 'room_update', room: updated });
@@ -1777,9 +1772,6 @@ const requestHandler = async (req, res) => {
           note: '还款'
         });
       }
-
-      // 还款后检查利率
-      autoAdjustInterestRate(roomId, newBankBalanceRepay);
 
       const updated = publicRoom(getRoom(roomId));
       broadcastRoom(roomId, { type: 'room_update', room: updated });
@@ -2053,7 +2045,9 @@ setInterval(() => {
         }
 
         saveRoomConfig(roomId, { ...room.config, bankBalance, lastInterestAt: now });
-        autoAdjustInterestRate(roomId, bankBalance);
+        if (shouldAutoAdjustInterestRate('interest-settled')) {
+          autoAdjustInterestRate(roomId, bankBalance);
+        }
         shouldBroadcast = true;
       }
 
