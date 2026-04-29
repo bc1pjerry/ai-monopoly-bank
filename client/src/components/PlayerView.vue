@@ -388,22 +388,40 @@
                 {{ depositLoading ? '处理中...' : '确认存款' }}
               </button>
             </div>
-            <!-- 我的存款列表 -->
-            <div class="deposit-list-title" v-if="myDeposits.length > 0">我的存款</div>
-            <div v-if="myDeposits.length === 0" class="deposit-empty">暂无存款</div>
-            <div v-for="dep in myDeposits" :key="dep.id" class="deposit-item">
-              <div class="deposit-item-left">
-                <div class="deposit-item-amount">¥{{ fmt(dep.amount) }}</div>
-                <div class="deposit-item-time">存入于 {{ fmtTime(dep.created_at) }}</div>
-              </div>
-              <div class="deposit-item-right">
+            <!-- 我的存款账户 -->
+            <div class="deposit-list-title" v-if="myDepositAccount">我的存款账户</div>
+            <div v-if="!myDepositAccount" class="deposit-empty">暂无存款</div>
+            <div v-else class="deposit-account">
+              <div class="deposit-account-main">
+                <div>
+                  <div class="deposit-item-amount">¥{{ fmt(myDepositTotal) }}</div>
+                  <div class="deposit-item-time">开户于 {{ fmtTime(myDepositAccount.created_at) }}</div>
+                </div>
                 <div class="deposit-item-rate">{{ room.config.interestRate ?? 1.5 }}% / 期</div>
-                <button class="deposit-withdraw-btn" @click="submitWithdraw(dep)">取出</button>
               </div>
-            </div>
-            <div class="deposit-total" v-if="myDeposits.length > 0">
-              <span>存款总额</span>
-              <span class="deposit-total-val">¥{{ fmt(myDeposits.reduce((s, d) => s + d.amount, 0)) }}</span>
+              <div class="deposit-breakdown">
+                <div>
+                  <span>剩余本金</span>
+                  <strong>¥{{ fmt(myDepositPrincipal) }}</strong>
+                </div>
+                <div>
+                  <span>累计利息</span>
+                  <strong class="deposit-interest-earned">+¥{{ fmt(myDepositInterestTotal) }}</strong>
+                </div>
+              </div>
+              <div class="deposit-withdraw-panel">
+                <div class="deposit-input-label">取出金额</div>
+                <NumPad v-model="withdrawAmount" @ok="submitWithdraw" />
+                <div class="deposit-preview" v-if="withdrawAmount > 0">
+                  取款后剩余：<span class="deposit-preview-val">¥{{ fmt(Math.max(0, myDepositTotal - withdrawAmount)) }}</span>
+                </div>
+                <div class="deposit-withdraw-actions">
+                  <button class="deposit-withdraw-btn" :disabled="withdrawLoading" @click="submitWithdraw(myDepositTotal)">全部取出</button>
+                  <button class="deposit-btn deposit-btn--withdraw" :disabled="!(withdrawAmount > 0) || withdrawAmount > myDepositTotal || withdrawLoading" @click="submitWithdraw()">
+                    {{ withdrawLoading ? '处理中...' : '确认取款' }}
+                  </button>
+                </div>
+              </div>
             </div>
           </section>
         </div><!-- financeTab=deposit end -->
@@ -2117,11 +2135,16 @@ async function submitFine() {
 // ─── 存款 ─────────────────────────────────────────────────────────────────────
 const depositAmount = ref(null)
 const depositLoading = ref(false)
+const withdrawAmount = ref(null)
+const withdrawLoading = ref(false)
 
 const myDeposits = computed(() =>
   (props.room.deposits || []).filter(d => d.player_id === props.myPlayerId && d.status === 'active')
 )
+const myDepositAccount = computed(() => myDeposits.value[0] || null)
 const myDepositTotal = computed(() => myDeposits.value.reduce((s, d) => s + Number(d.amount || 0), 0))
+const myDepositPrincipal = computed(() => Number(myDepositAccount.value?.principal_amount || 0))
+const myDepositInterestTotal = computed(() => Number(myDepositAccount.value?.interest_earned || 0))
 
 const myLoans = computed(() =>
   (props.room.loans || []).filter(l => l.player_id === props.myPlayerId && l.status === 'active')
@@ -2150,15 +2173,21 @@ async function submitDeposit() {
   finally { depositLoading.value = false }
 }
 
-async function submitWithdraw(dep) {
-  if (!confirm(`确认取出存款 ¥${fmt(dep.amount)}？`)) return
+async function submitWithdraw(amountOverride = null) {
+  const amount = Math.floor(Number(amountOverride ?? withdrawAmount.value))
+  if (!(amount > 0)) return alert('请输入取款金额')
+  if (amount > myDepositTotal.value) return alert('取款金额超过存款余额')
+  if (!confirm(`确认取出存款 ¥${fmt(amount)}？`)) return
+  withdrawLoading.value = true
   try {
     const res = await apiWithToken(`/api/rooms/${props.room.id}/withdraw`, props.myToken, {
       method: 'POST',
-      body: { depositId: dep.id }
+      body: { amount }
     })
     emit('room-updated', res.room)
+    withdrawAmount.value = null
   } catch (e) { alert('取款失败：' + e.message) }
+  finally { withdrawLoading.value = false }
 }
 
 // ─── 贷款 ─────────────────────────────────────────────────────────────────────
@@ -3939,6 +3968,56 @@ async function submitRepay(loan) {
   font-size: 14px;
   padding: 24px 0;
 }
+.deposit-account {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: rgba(16,185,129,.07);
+  border: 1px solid rgba(16,185,129,.2);
+  border-radius: 14px;
+  padding: 14px 16px;
+}
+.deposit-account-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.deposit-breakdown {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+.deposit-breakdown div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.deposit-breakdown span {
+  font-size: 12px;
+  color: #64748b;
+}
+.deposit-breakdown strong {
+  font-size: 16px;
+  color: #e2e8f0;
+}
+.deposit-interest-earned {
+  color: #34d399 !important;
+}
+.deposit-withdraw-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+.deposit-withdraw-actions {
+  display: grid;
+  grid-template-columns: minmax(104px, .8fr) minmax(0, 1.2fr);
+  gap: 10px;
+}
 .deposit-item {
   display: flex;
   align-items: center;
@@ -3990,8 +4069,13 @@ async function submitRepay(loan) {
   transition: background .15s;
   -webkit-tap-highlight-color: transparent;
 }
+.deposit-withdraw-btn:disabled { opacity: .45; cursor: default; }
 .deposit-withdraw-btn:hover { background: rgba(239,68,68,.2); }
 .deposit-withdraw-btn:active { transform: scale(.96); }
+.deposit-btn--withdraw {
+  background: linear-gradient(135deg, #ef4444, #b91c1c);
+  box-shadow: 0 4px 16px rgba(239,68,68,.25);
+}
 
 .deposit-total {
   display: flex;

@@ -10,6 +10,7 @@ const createDatabase = require('./db');
 const { WebSocketServer } = require('ws');
 const { createAiHandler, chat, DEFAULT_MODEL } = require('./ai');
 const { AVATAR_COUNT, avatarFilePath, avatarPath, normalizeAvatarId } = require('./avatar');
+const { applyDeposit, applyInterest, applyWithdrawal, normalizeDepositAccount } = require('./depositAccount');
 
 function getLocalIP() {
   const nets = os.networkInterfaces();
@@ -100,6 +101,8 @@ db.exec(`
     player_id   TEXT NOT NULL REFERENCES players(id),
     room_id     TEXT NOT NULL REFERENCES rooms(id),
     amount      INTEGER NOT NULL,
+    principal_amount INTEGER NOT NULL DEFAULT 0,
+    interest_earned INTEGER NOT NULL DEFAULT 0,
     created_at  INTEGER NOT NULL,
     status      TEXT NOT NULL DEFAULT 'active'
   );
@@ -132,6 +135,9 @@ try { db.exec(`ALTER TABLE properties ADD COLUMN group_key TEXT NOT NULL DEFAULT
 try { db.exec(`ALTER TABLE properties ADD COLUMN rule_kind TEXT NOT NULL DEFAULT 'buildable'`); } catch {}
 try { db.exec(`ALTER TABLE properties ADD COLUMN rule_data TEXT NOT NULL DEFAULT '{}'`); } catch {}
 try { db.exec(`CREATE TABLE IF NOT EXISTS deposits (id TEXT PRIMARY KEY, player_id TEXT NOT NULL, room_id TEXT NOT NULL, amount INTEGER NOT NULL, created_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'active')`); } catch {}
+try { db.exec(`ALTER TABLE deposits ADD COLUMN principal_amount INTEGER NOT NULL DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE deposits ADD COLUMN interest_earned INTEGER NOT NULL DEFAULT 0`); } catch {}
+try { db.exec(`UPDATE deposits SET principal_amount = amount WHERE principal_amount = 0 AND amount > 0`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_deposits_room ON deposits(room_id)`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_deposits_player ON deposits(player_id)`); } catch {}
 try { db.exec(`CREATE TABLE IF NOT EXISTS loans (id TEXT PRIMARY KEY, player_id TEXT NOT NULL, room_id TEXT NOT NULL, principal INTEGER NOT NULL, remaining INTEGER NOT NULL, rate REAL NOT NULL, created_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'active', ai_reason TEXT NOT NULL DEFAULT '')`); } catch {}
@@ -199,11 +205,11 @@ const stmts = {
 
   // deposits
   insertDeposit: db.prepare(
-    'INSERT INTO deposits (id, player_id, room_id, amount, created_at, status) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO deposits (id, player_id, room_id, amount, principal_amount, interest_earned, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ),
   getDeposits: db.prepare('SELECT * FROM deposits WHERE room_id = ? AND status = ? ORDER BY created_at DESC'),
   getPlayerDeposits: db.prepare('SELECT * FROM deposits WHERE player_id = ? AND status = ? ORDER BY created_at DESC'),
-  updateDepositAmount: db.prepare('UPDATE deposits SET amount = ? WHERE id = ?'),
+  updateDepositAccount: db.prepare('UPDATE deposits SET amount = ?, principal_amount = ?, interest_earned = ? WHERE id = ?'),
   updateDepositStatus: db.prepare('UPDATE deposits SET status = ? WHERE id = ?'),
 
   // loans
@@ -571,6 +577,56 @@ function addLog(roomId, entry) {
   stmts.insertLog.run(id, roomId, ts, entry.type, entry.text, entry.note || '');
   stmts.updateRoomTs.run(ts, roomId);
 }
+
+function updateDepositAccountRow(depositId, account) {
+  const normalized = normalizeDepositAccount(account);
+  stmts.updateDepositAccount.run(
+    normalized.amount,
+    normalized.principal_amount,
+    normalized.interest_earned,
+    depositId
+  );
+}
+
+function ensureMergedDepositAccount(roomId, playerId) {
+  const activeDeposits = stmts.getDeposits
+    .all(roomId, 'active')
+    .filter(dep => dep.player_id === playerId)
+    .sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0));
+
+  if (activeDeposits.length === 0) return null;
+
+  const primary = activeDeposits[0];
+  const merged = activeDeposits.reduce((sum, dep) => {
+    const account = normalizeDepositAccount(dep);
+    return {
+      amount: sum.amount + account.amount,
+      principal_amount: sum.principal_amount + account.principal_amount,
+      interest_earned: sum.interest_earned + account.interest_earned
+    };
+  }, { amount: 0, principal_amount: 0, interest_earned: 0 });
+
+  updateDepositAccountRow(primary.id, merged);
+  for (const dep of activeDeposits.slice(1)) {
+    stmts.updateDepositStatus.run('merged', dep.id);
+  }
+
+  return {
+    ...primary,
+    ...merged
+  };
+}
+
+function mergeExistingDepositAccounts() {
+  const pairs = db
+    .prepare("SELECT DISTINCT room_id, player_id FROM deposits WHERE status = 'active'")
+    .all();
+  for (const pair of pairs) {
+    ensureMergedDepositAccount(pair.room_id, pair.player_id);
+  }
+}
+
+mergeExistingDepositAccounts();
 
 function updateRoom(room) {
   const now = Date.now();
@@ -1553,14 +1609,28 @@ const requestHandler = async (req, res) => {
       db.prepare('UPDATE rooms SET config = ?, updated_at = ? WHERE id = ?')
         .run(JSON.stringify(newConfigDep), Date.now(), roomId);
 
-      // 创建存款记录
-      const depositId = `dep_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-      stmts.insertDeposit.run(depositId, player.id, roomId, depositAmount, Date.now(), 'active');
+      const activeAccount = ensureMergedDepositAccount(roomId, player.id);
+      const nextAccount = applyDeposit(activeAccount || {}, depositAmount);
+      if (activeAccount) {
+        updateDepositAccountRow(activeAccount.id, nextAccount);
+      } else {
+        const depositId = `dep_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        stmts.insertDeposit.run(
+          depositId,
+          player.id,
+          roomId,
+          nextAccount.amount,
+          nextAccount.principal_amount,
+          nextAccount.interest_earned,
+          Date.now(),
+          'active'
+        );
+      }
 
       addLog(roomId, {
         type: 'deposit',
-        text: `${player.name} 存入 ¥${depositAmount}（利率 ${room.config.interestRate ?? 1.5}%）`,
-        note: '存款'
+        text: `${player.name} 存入 ¥${depositAmount}，存款账户余额 ¥${nextAccount.amount}（利率 ${room.config.interestRate ?? 1.5}%）`,
+        note: `累计利息 ¥${nextAccount.interest_earned}`
       });
 
       // 存款后检查是否需要自动调整利率
@@ -1572,30 +1642,40 @@ const requestHandler = async (req, res) => {
     }
 
     // ── 存款：取出 ──────────────────────────────────────────────────────────────
-    // POST /api/rooms/:id/withdraw  { token, depositId, amount? }
+    // POST /api/rooms/:id/withdraw  { token, amount }
     if (req.method === 'POST' && parts[3] === 'withdraw') {
       if (identity.role !== 'player') return send(res, 403, { ok: false, error: 'forbidden' });
       const player = room.players.find(p => p.id === identity.player.id);
       if (!player) return send(res, 404, { ok: false, error: 'player_not_found' });
-      const deposit = (room.deposits || []).find(d => d.id === reqBody.depositId && d.player_id === player.id);
+      const deposit = ensureMergedDepositAccount(roomId, player.id);
       if (!deposit) return send(res, 404, { ok: false, error: 'deposit_not_found' });
 
-      const withdrawAmount = deposit.amount;
-      if (withdrawAmount <= 0) return send(res, 400, { ok: false, error: 'invalid_amount' });
+      const requestedAmount = reqBody.amount == null ? deposit.amount : Math.floor(Number(reqBody.amount));
+      let withdrawal;
+      try {
+        withdrawal = applyWithdrawal(deposit, requestedAmount);
+      } catch (e) {
+        if (e.message === 'insufficient_deposit') return send(res, 400, { ok: false, error: 'insufficient_deposit' });
+        return send(res, 400, { ok: false, error: 'invalid_amount' });
+      }
 
       // 银行资金减少，玩家余额增加
-      const newBankBalanceWd = (room.config.bankBalance ?? 0) - withdrawAmount;
+      const newBankBalanceWd = (room.config.bankBalance ?? 0) - withdrawal.withdrawn;
       const newConfigWd = { ...room.config, bankBalance: newBankBalanceWd };
       db.prepare('UPDATE rooms SET config = ?, updated_at = ? WHERE id = ?')
         .run(JSON.stringify(newConfigWd), Date.now(), roomId);
-      player.balance += withdrawAmount;
+      player.balance += withdrawal.withdrawn;
       persistPlayer(player);
-      stmts.updateDepositStatus.run('withdrawn', deposit.id);
+      if (withdrawal.closed) {
+        stmts.updateDepositStatus.run('withdrawn', deposit.id);
+      } else {
+        updateDepositAccountRow(deposit.id, withdrawal);
+      }
 
       addLog(roomId, {
         type: 'withdraw',
-        text: `${player.name} 取出存款 ¥${withdrawAmount}`,
-        note: '取款'
+        text: `${player.name} 取出存款 ¥${withdrawal.withdrawn}，剩余存款 ¥${withdrawal.amount}`,
+        note: `累计利息 ¥${withdrawal.interest_earned}`
       });
 
       // 取款后检查利率
@@ -1933,21 +2013,21 @@ setInterval(() => {
           });
         }
 
-        // 2. 存款利息结算：每个存款记录按当前利率增长，银行付出利息给玩家
+        // 2. 存款利息结算：每个玩家的合并存款账户按当前利率增长，银行付出利息给玩家
         const activeDeposits = stmts.getDeposits.all(roomId, 'active');
         for (const dep of activeDeposits) {
-          const depInterest = Math.round(dep.amount * (rate / 100));
+          const nextAccount = applyInterest(dep, rate);
+          const depInterest = nextAccount.lastInterest;
           if (depInterest <= 0) continue;
-          const newDepAmount = dep.amount + depInterest;
-          stmts.updateDepositAmount.run(newDepAmount, dep.id);
+          updateDepositAccountRow(dep.id, nextAccount);
           bankBalance -= depInterest;
           hasChanges = true;
           const depPlayer = room.players.find(p => p.id === dep.player_id);
           if (depPlayer) {
             addLog(roomId, {
               type: 'deposit-interest',
-              text: `${depPlayer.name} 存款利息 +¥${depInterest}（存款 ¥${dep.amount} → ¥${newDepAmount}）`,
-              note: '存款利息'
+              text: `${depPlayer.name} 存款利息 +¥${depInterest}（存款 ¥${dep.amount} → ¥${nextAccount.amount}）`,
+              note: `累计利息 ¥${nextAccount.interest_earned}`
             });
           }
         }
