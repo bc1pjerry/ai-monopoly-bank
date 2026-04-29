@@ -2,9 +2,7 @@
   <section class="setup">
     <!-- 创建新房间 -->
     <div class="card create-card">
-      <div class="badge" style="display:inline-flex; margin-bottom:12px;">10 秒开房 · 扫码进房</div>
-      <h2>先快速布置一局</h2>
-      <p>输入人均金额和人数，系统会立刻创建房间，并生成各人专属链接。</p>
+      <h1 class="setup-title">大富翁银行</h1>
       <div class="setup-form-grid">
         <div class="field">
           <label>人均金额</label>
@@ -326,8 +324,30 @@ onMounted(loadHistory)
   display: flex;
   flex-direction: column;
   justify-content: center;
+  position: relative;
+  isolation: isolate;
 }
-.create-card h2 { margin-top:0; font-size:30px; }
+.setup::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(180deg, rgba(8,16,31,.58), rgba(8,16,31,.78)),
+    radial-gradient(circle at 50% 42%, rgba(8,16,31,.12), rgba(8,16,31,.78) 72%),
+    url("/assets/monopoly-bank-bg.png") center / cover no-repeat;
+}
+.create-card {
+  background: rgba(17,24,39,.78);
+  border-color: rgba(255,255,255,.18);
+}
+.setup-title {
+  margin: 0 0 24px;
+  font-size: 46px;
+  line-height: 1.05;
+  font-weight: 900;
+  letter-spacing: 0;
+}
 .setup-form-grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
 .history-drawer {
   margin-top: 12px;
@@ -410,9 +430,10 @@ onMounted(loadHistory)
   padding: 10px 14px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: rgba(255,255,255,.055);
+  background: rgba(17,24,39,.68);
   color: var(--text);
   box-shadow: 0 10px 28px rgba(0,0,0,.18);
+  backdrop-filter: blur(12px);
 }
 .history-toggle span {
   color: var(--muted);
@@ -713,6 +734,10 @@ onMounted(loadHistory)
   .setup {
     min-height: calc(100vh - 32px);
     min-height: calc(100dvh - 32px);
+  }
+  .setup-title {
+    margin-bottom: 20px;
+    font-size: 36px;
   }
   .advanced-toggle { align-items: flex-start; flex-direction: column; }
   .lottery-settings-head { align-items: flex-start; flex-direction: column; }
