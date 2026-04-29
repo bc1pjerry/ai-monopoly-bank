@@ -2,7 +2,7 @@
   <div class="ocr-overlay" @click.self="closeModal">
     <div class="ocr-sheet">
       <div class="ocr-header">
-        <span class="ocr-title">扫描地契</span>
+        <span class="ocr-title">扫描资产卡</span>
         <button class="ocr-close" @click="closeModal">✕</button>
       </div>
 
@@ -18,7 +18,7 @@
                 <circle cx="52" cy="23" r="3" fill="currentColor" fill-opacity="0.5"/>
               </svg>
             </div>
-            <p class="guide-tip">拍摄地契卡片，AI 将自动识别<br/>地产名称、每层加盖费用及各档过路费</p>
+            <p class="guide-tip">拍摄资产卡片，AI 将自动识别<br/>名称、价格、规则及过路费</p>
           </div>
 
           <div class="action-btns">
@@ -160,32 +160,89 @@
                 </div>
               </div>
               <div class="deed-row">
-                <span class="deed-label">每层加盖费用</span>
-                <div class="deed-price-wrap">
-                  <span class="deed-currency">¥</span>
-                  <input
-                    v-model.number="deed.buildUnitCost"
-                    class="deed-input deed-input-num"
-                    type="number"
-                    placeholder="—"
-                    min="0"
-                  />
-                </div>
+                <span class="deed-label">卡片类型</span>
+                <select v-model="deed.cardType" class="deed-input deed-select" @change="onCardTypeChanged">
+                  <option value="deed">普通地契</option>
+                  <option value="special">特殊资产</option>
+                </select>
               </div>
-              <div class="deed-divider"></div>
-              <div class="deed-row" v-for="(label, i) in rentLabels" :key="i">
-                <span class="deed-label">{{ label }}</span>
-                <div class="deed-price-wrap">
-                  <span class="deed-currency">¥</span>
-                  <input
-                    v-model.number="deed.rents[i]"
-                    class="deed-input deed-input-num"
-                    type="number"
-                    placeholder="—"
-                    min="0"
-                  />
+              <template v-if="deed.cardType === 'special'">
+                <div class="deed-row">
+                  <span class="deed-label">同类分组</span>
+                  <input v-model.trim="deed.groupKey" class="deed-input" placeholder="如：铁路 / 车站 / 港口" maxlength="30" />
                 </div>
-              </div>
+                <div class="deed-row">
+                  <span class="deed-label">计费规则</span>
+                  <select v-model="deed.ruleKind" class="deed-input deed-select" @change="onRuleKindChanged">
+                    <option value="count_tier">同类越多越贵</option>
+                    <option value="pair_bonus">两张成套高额</option>
+                    <option value="dice_multiplier">骰点乘倍数</option>
+                  </select>
+                </div>
+                <template v-if="deed.ruleKind === 'count_tier'">
+                  <div class="deed-divider"></div>
+                  <div class="deed-row" v-for="(_, i) in deed.ruleData.rentsByOwned" :key="`tier-${i}`">
+                    <span class="deed-label">持有 {{ i + 1 }} 张</span>
+                    <div class="deed-price-wrap">
+                      <span class="deed-currency">¥</span>
+                      <input v-model.number="deed.ruleData.rentsByOwned[i]" class="deed-input deed-input-num" type="number" placeholder="—" min="0" />
+                    </div>
+                  </div>
+                </template>
+                <template v-else-if="deed.ruleKind === 'pair_bonus'">
+                  <div class="deed-divider"></div>
+                  <div class="deed-row">
+                    <span class="deed-label">单张过路费</span>
+                    <div class="deed-price-wrap">
+                      <span class="deed-currency">¥</span>
+                      <input v-model.number="deed.ruleData.singleRent" class="deed-input deed-input-num" type="number" placeholder="—" min="0" />
+                    </div>
+                  </div>
+                  <div class="deed-row">
+                    <span class="deed-label">成套过路费</span>
+                    <div class="deed-price-wrap">
+                      <span class="deed-currency">¥</span>
+                      <input v-model.number="deed.ruleData.pairRent" class="deed-input deed-input-num" type="number" placeholder="—" min="0" />
+                    </div>
+                  </div>
+                </template>
+                <template v-else-if="deed.ruleKind === 'dice_multiplier'">
+                  <div class="deed-divider"></div>
+                  <div class="deed-row" v-for="(_, i) in deed.ruleData.multipliersByOwned" :key="`mult-${i}`">
+                    <span class="deed-label">持有 {{ i + 1 }} 张倍数</span>
+                    <input v-model.number="deed.ruleData.multipliersByOwned[i]" class="deed-input deed-input-num" type="number" placeholder="—" min="0" />
+                  </div>
+                </template>
+              </template>
+              <template v-else>
+                <div class="deed-row">
+                  <span class="deed-label">每层加盖费用</span>
+                  <div class="deed-price-wrap">
+                    <span class="deed-currency">¥</span>
+                    <input
+                      v-model.number="deed.buildUnitCost"
+                      class="deed-input deed-input-num"
+                      type="number"
+                      placeholder="—"
+                      min="0"
+                    />
+                  </div>
+                </div>
+                <div class="deed-divider"></div>
+                <div class="deed-row" v-for="(label, i) in rentLabels" :key="i">
+                  <span class="deed-label">{{ label }}</span>
+                  <div class="deed-price-wrap">
+                    <span class="deed-currency">¥</span>
+                    <input
+                      v-model.number="deed.rents[i]"
+                      class="deed-input deed-input-num"
+                      type="number"
+                      placeholder="—"
+                      min="0"
+                    />
+                  </div>
+                </div>
+              </template>
             </div>
 
             <div class="result-actions">
@@ -205,10 +262,13 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref } from 'vue'
 const emit = defineEmits(['close', 'deed-confirmed'])
 
 const OPEN_CV_URL = '/opencv.js'
-const STABLE_FRAME_TARGET = 10
-const DETECTION_INTERVAL = 110
-const MIN_SCORE_TO_DRAW = 0.46
-const MIN_SCORE_TO_LOCK = 0.58
+const STABLE_FRAME_TARGET = 8
+const DETECTION_INTERVAL = 90
+const MIN_SCORE_TO_DRAW = 0.38
+const MIN_SCORE_TO_LOCK = 0.52
+const MISS_FRAME_TOLERANCE = 4
+const CANDIDATE_EVALUATION_LIMIT = 6
+const CARD_ASPECT_RATIO = 1.58
 
 const phase = ref('idle')
 const previewUrl = ref('')
@@ -228,6 +288,7 @@ let rafId = 0
 let lastDetectionAt = 0
 let lastQuad = null
 let lastCandidate = null
+let missedFrames = 0
 let cvReady = false
 
 const rentLabels = ['空地过路费', '1 栋过路费', '2 栋过路费', '3 栋过路费', '4 栋过路费', '酒店过路费']
@@ -235,6 +296,16 @@ const rentLabels = ['空地过路费', '1 栋过路费', '2 栋过路费', '3 �
 const deed = reactive({
   name: '',
   price: null,
+  cardType: 'deed',
+  groupKey: '',
+  ruleKind: 'buildable',
+  ruleData: {
+    rentsByOwned: [null, null, null, null],
+    singleRent: null,
+    pairRent: null,
+    pairSize: 2,
+    multipliersByOwned: [null, null]
+  },
   buildUnitCost: null,
   rents: [null, null, null, null, null, null]
 })
@@ -251,6 +322,7 @@ async function startLiveScan() {
   isAutoCapturing.value = false
   lastQuad = null
   lastCandidate = null
+  missedFrames = 0
 
   await nextTick()
 
@@ -259,10 +331,12 @@ async function startLiveScan() {
       video: {
         facingMode: { ideal: 'environment' },
         width: { ideal: 1280 },
-        height: { ideal: 720 }
+        height: { ideal: 720 },
+        focusMode: { ideal: 'continuous' }
       },
       audio: false
     })
+    await tuneCameraTrack(stream)
   } catch (err) {
     phase.value = 'error'
     errorMsg.value = '浏览器未允许实时摄像头。可以改用“拍照识别”，或在 HTTPS/localhost 环境下打开实时扫描。'
@@ -327,6 +401,24 @@ function loadOpenCv() {
   return window.__deedCvLoading
 }
 
+async function tuneCameraTrack(mediaStream) {
+  const [track] = mediaStream.getVideoTracks()
+  if (!track?.getCapabilities || !track.applyConstraints) return
+
+  const capabilities = track.getCapabilities()
+  const advanced = {}
+  if (capabilities.focusMode?.includes('continuous')) advanced.focusMode = 'continuous'
+  if (capabilities.exposureMode?.includes('continuous')) advanced.exposureMode = 'continuous'
+  if (capabilities.whiteBalanceMode?.includes('continuous')) advanced.whiteBalanceMode = 'continuous'
+
+  if (Object.keys(advanced).length === 0) return
+  try {
+    await track.applyConstraints({ advanced: [advanced] })
+  } catch {
+    // Some mobile browsers expose capabilities but reject advanced constraints.
+  }
+}
+
 function startDetectionLoop() {
   cancelAnimationFrame(rafId)
   const tick = (now) => {
@@ -348,6 +440,16 @@ function runDetection() {
 
   const candidate = findBestQuad(video)
   if (!candidate || candidate.score < MIN_SCORE_TO_DRAW) {
+    missedFrames += 1
+    stableFrames.value = Math.max(0, stableFrames.value - 1)
+
+    if (lastCandidate && missedFrames <= MISS_FRAME_TOLERANCE) {
+      detectedQuad.value = lastCandidate.quad
+      cameraHint.value = '边缘短暂丢失，请保持稳定'
+      drawOverlay(lastCandidate.quad, lastCandidate.score)
+      return
+    }
+
     lastCandidate = null
     lastQuad = null
     detectedQuad.value = null
@@ -357,18 +459,25 @@ function runDetection() {
     return
   }
 
-  lastCandidate = candidate
-  detectedQuad.value = candidate.quad
+  missedFrames = 0
+  const quad = smoothQuad(lastCandidate?.quad, candidate.quad, video)
+  const smoothedCandidate = { ...candidate, quad }
+  lastCandidate = smoothedCandidate
+  detectedQuad.value = quad
 
-  if (candidate.score >= MIN_SCORE_TO_LOCK && isSimilarQuad(candidate.quad, lastQuad, video)) {
+  if (candidate.score >= MIN_SCORE_TO_LOCK && isSimilarQuad(quad, lastQuad, video, 0.055)) {
     stableFrames.value += 1
-  } else {
+  } else if (candidate.score >= MIN_SCORE_TO_LOCK) {
     stableFrames.value = 1
+  } else {
+    stableFrames.value = 0
   }
 
-  lastQuad = candidate.quad
-  cameraHint.value = stableFrames.value >= STABLE_FRAME_TARGET ? '已锁定，正在识别…' : '保持地契稳定'
-  drawOverlay(candidate.quad, candidate.score)
+  lastQuad = quad
+  cameraHint.value = stableFrames.value >= STABLE_FRAME_TARGET
+    ? '已锁定，正在识别…'
+    : candidate.score >= MIN_SCORE_TO_LOCK ? '保持地契稳定' : '已找到轮廓，调整角度或光线'
+  drawOverlay(quad, candidate.score)
 
   if (stableFrames.value >= STABLE_FRAME_TARGET) {
     captureFromCamera(true)
@@ -377,7 +486,7 @@ function runDetection() {
 
 function findBestQuad(video) {
   const cv = window.cv
-  const maxSide = 640
+  const maxSide = 720
   const scale = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight))
   const width = Math.max(1, Math.round(video.videoWidth * scale))
   const height = Math.max(1, Math.round(video.videoHeight * scale))
@@ -387,75 +496,198 @@ function findBestQuad(video) {
 
   const src = cv.imread(workCanvas)
   const gray = new cv.Mat()
+  const equalized = new cv.Mat()
   const blur = new cv.Mat()
-  const edges = new cv.Mat()
+  const edgesLow = new cv.Mat()
+  const edgesHigh = new cv.Mat()
   const dilated = new cv.Mat()
   const thresh = new cv.Mat()
   const combined = new cv.Mat()
+  const closed = new cv.Mat()
   const kernel = cv.Mat.ones(3, 3, cv.CV_8U)
-  const contours = new cv.MatVector()
-  const hierarchy = new cv.Mat()
+  const closeKernel = cv.Mat.ones(5, 5, cv.CV_8U)
   const candidates = []
 
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY)
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0)
-    cv.Canny(blur, edges, 30, 110)
-    cv.adaptiveThreshold(blur, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 41, 4)
+    cv.equalizeHist(gray, equalized)
+    cv.GaussianBlur(equalized, blur, new cv.Size(5, 5), 0)
+    cv.Canny(blur, edgesLow, 18, 82)
+    cv.Canny(blur, edgesHigh, 48, 150)
+    cv.adaptiveThreshold(blur, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 37, 5)
     cv.bitwise_not(thresh, thresh)
-    cv.bitwise_or(edges, thresh, combined)
-    cv.dilate(combined, dilated, kernel)
-    cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    cv.bitwise_or(edgesLow, edgesHigh, combined)
+    cv.bitwise_or(combined, thresh, combined)
+    cv.morphologyEx(combined, closed, cv.MORPH_CLOSE, closeKernel)
+    cv.dilate(closed, dilated, kernel)
 
-    for (let i = 0; i < contours.size(); i++) {
-      const contour = contours.get(i)
-      const area = cv.contourArea(contour)
-      const areaRatio = area / (width * height)
-      if (areaRatio < 0.06 || areaRatio > 0.9) {
-        contour.delete()
-        continue
-      }
-
-      const perimeter = cv.arcLength(contour, true)
-      const approx = new cv.Mat()
-      cv.approxPolyDP(contour, approx, Math.max(8, perimeter * 0.025), true)
-
-      if (approx.rows === 4 && cv.isContourConvex(approx)) {
-        const smallQuad = pointsFromApprox(approx)
-        const quad = smallQuad.map((p) => ({ x: p.x / scale, y: p.y / scale }))
-        const score = scoreQuad(quad, video, areaRatio)
-        if (score > 0) candidates.push({ quad, score, areaRatio })
-      }
-
-      approx.delete()
-      contour.delete()
-    }
+    collectQuadCandidates(dilated, cv.RETR_LIST, scale, width, height, video, candidates)
+    collectQuadCandidates(edgesHigh, cv.RETR_EXTERNAL, scale, width, height, video, candidates)
   } finally {
     src.delete()
     gray.delete()
+    equalized.delete()
     blur.delete()
-    edges.delete()
+    edgesLow.delete()
+    edgesHigh.delete()
     dilated.delete()
     thresh.delete()
     combined.delete()
+    closed.delete()
     kernel.delete()
+    closeKernel.delete()
+  }
+
+  const bestGeometry = dedupeCandidates(candidates)
+    .sort((a, b) => b.geometryScore - a.geometryScore)
+    .slice(0, CANDIDATE_EVALUATION_LIMIT)
+    .map((candidate) => ({
+      ...candidate,
+      score: scoreQuad(candidate.quad, video, candidate.areaRatio) * candidate.sourceWeight
+    }))
+    .sort((a, b) => b.score - a.score)
+
+  return bestGeometry[0] || null
+}
+
+function collectQuadCandidates(mask, retrievalMode, scale, width, height, video, candidates) {
+  const cv = window.cv
+  const contours = new cv.MatVector()
+  const hierarchy = new cv.Mat()
+  const frameArea = width * height
+
+  try {
+    cv.findContours(mask, contours, hierarchy, retrievalMode, cv.CHAIN_APPROX_SIMPLE)
+
+    for (let i = 0; i < contours.size(); i++) {
+      const contour = contours.get(i)
+      try {
+        const area = Math.abs(cv.contourArea(contour))
+        const areaRatio = area / frameArea
+        if (areaRatio < 0.035 || areaRatio > 0.92) continue
+
+        const perimeter = cv.arcLength(contour, true)
+        if (perimeter < Math.min(width, height) * 0.55) continue
+
+        addContourQuads(contour, areaRatio, scale, width, height, video, candidates)
+      } finally {
+        contour.delete()
+      }
+    }
+  } finally {
     contours.delete()
     hierarchy.delete()
   }
-
-  candidates.sort((a, b) => b.score - a.score)
-  return candidates[0] || null
 }
 
-function pointsFromApprox(approx) {
+function addContourQuads(contour, areaRatio, scale, width, height, video, candidates) {
+  const cv = window.cv
+  const perimeter = cv.arcLength(contour, true)
+  const frameArea = width * height
+  const epsilons = [0.015, 0.025, 0.04, 0.065]
+
+  const pushSmallQuad = (smallQuad, sourceWeight = 1) => {
+    if (!smallQuad || !hasDistinctCorners(smallQuad)) return
+    const ordered = orderQuad(smallQuad)
+    const quadAreaRatio = Math.abs(polygonArea(ordered)) / frameArea
+    if (quadAreaRatio < 0.045 || quadAreaRatio > 0.92) return
+
+    const quad = ordered.map((p) => ({ x: p.x / scale, y: p.y / scale }))
+    const geometryScore = scoreQuadGeometry(quad, video, quadAreaRatio || areaRatio)
+    if (geometryScore >= 0.36) {
+      candidates.push({ quad, geometryScore, areaRatio: quadAreaRatio || areaRatio, sourceWeight })
+    }
+  }
+
+  for (const epsilon of epsilons) {
+    const approx = new cv.Mat()
+    try {
+      cv.approxPolyDP(contour, approx, Math.max(5, perimeter * epsilon), true)
+      if (approx.rows === 4 && cv.isContourConvex(approx)) {
+        pushSmallQuad(pointsFromMat(approx), 1)
+      } else if (approx.rows > 4 && approx.rows <= 14) {
+        pushSmallQuad(extremeQuad(pointsFromMat(approx)), 0.9)
+      }
+    } finally {
+      approx.delete()
+    }
+  }
+
+  const hull = new cv.Mat()
+  try {
+    cv.convexHull(contour, hull, false, true)
+    const hullPerimeter = cv.arcLength(hull, true)
+    for (const epsilon of [0.018, 0.032, 0.055]) {
+      const approxHull = new cv.Mat()
+      try {
+        cv.approxPolyDP(hull, approxHull, Math.max(5, hullPerimeter * epsilon), true)
+        if (approxHull.rows === 4 && cv.isContourConvex(approxHull)) {
+          pushSmallQuad(pointsFromMat(approxHull), 0.96)
+        } else if (approxHull.rows > 4 && approxHull.rows <= 16) {
+          pushSmallQuad(extremeQuad(pointsFromMat(approxHull)), 0.88)
+        }
+      } finally {
+        approxHull.delete()
+      }
+    }
+  } finally {
+    hull.delete()
+  }
+
+  try {
+    pushSmallQuad(pointsFromRotatedRect(cv.minAreaRect(contour)), 0.82)
+  } catch {
+    // minAreaRect can fail on a degenerate contour; the approximation paths above still cover normal cases.
+  }
+}
+
+function pointsFromMat(mat) {
   const points = []
-  for (let i = 0; i < approx.rows; i++) {
-    points.push({ x: approx.intPtr(i, 0)[0], y: approx.intPtr(i, 0)[1] })
+  for (let i = 0; i < mat.rows; i++) {
+    points.push({ x: mat.intPtr(i, 0)[0], y: mat.intPtr(i, 0)[1] })
   }
   return orderQuad(points)
 }
 
-function scoreQuad(quad, video, areaRatio) {
+function pointsFromRotatedRect(rect) {
+  return window.cv.RotatedRect.points(rect).map((p) => ({ x: p.x, y: p.y }))
+}
+
+function extremeQuad(points) {
+  if (points.length < 4) return null
+  const topLeft = points.reduce((best, p) => (p.x + p.y < best.x + best.y ? p : best), points[0])
+  const bottomRight = points.reduce((best, p) => (p.x + p.y > best.x + best.y ? p : best), points[0])
+  const topRight = points.reduce((best, p) => (p.x - p.y > best.x - best.y ? p : best), points[0])
+  const bottomLeft = points.reduce((best, p) => (p.x - p.y < best.x - best.y ? p : best), points[0])
+  return orderQuad([topLeft, topRight, bottomRight, bottomLeft])
+}
+
+function hasDistinctCorners(points) {
+  if (points.length !== 4) return false
+  const minDistance = Math.max(10, Math.sqrt(Math.abs(polygonArea(points))) * 0.08)
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      if (distance(points[i], points[j]) < minDistance) return false
+    }
+  }
+  return true
+}
+
+function dedupeCandidates(candidates) {
+  const unique = []
+  for (const candidate of candidates) {
+    const duplicate = unique.some((existing) => normalizedQuadDelta(candidate.quad, existing.quad) < 0.025)
+    if (!duplicate) unique.push(candidate)
+  }
+  return unique
+}
+
+function normalizedQuadDelta(a, b) {
+  const norm = Math.max(1, Math.sqrt(Math.abs(polygonArea(a))))
+  return a.reduce((sum, p, i) => sum + distance(p, b[i]), 0) / 4 / norm
+}
+
+function scoreQuadGeometry(quad, video, areaRatio) {
   const ordered = orderQuad(quad)
   const w1 = distance(ordered[0], ordered[1])
   const w2 = distance(ordered[3], ordered[2])
@@ -466,12 +698,18 @@ function scoreQuad(quad, video, areaRatio) {
   const longSide = Math.max(width, height)
   const shortSide = Math.max(1, Math.min(width, height))
   const aspect = longSide / shortSide
-  const aspectScore = clamp01(1 - Math.abs(aspect - 1.58) / 0.65)
-  const areaScore = areaRatio < 0.14 ? areaRatio / 0.14 : areaRatio > 0.74 ? (0.9 - areaRatio) / 0.16 : 1
+  const aspectScore = clamp01(1 - Math.abs(aspect - CARD_ASPECT_RATIO) / 0.82)
+  const areaScore = areaRatio < 0.12 ? areaRatio / 0.12 : areaRatio > 0.78 ? (0.94 - areaRatio) / 0.16 : 1
   const angleScore = rectangleAngleScore(ordered)
   const centerScore = centerBiasScore(ordered, video)
+  return clamp01(areaScore) * 0.24 + aspectScore * 0.28 + angleScore * 0.34 + centerScore * 0.14
+}
+
+function scoreQuad(quad, video, areaRatio) {
+  const ordered = orderQuad(quad)
+  const geometryScore = scoreQuadGeometry(ordered, video, areaRatio)
   const appearanceScore = scoreWarpedAppearance(video, ordered)
-  return clamp01(areaScore) * 0.18 + aspectScore * 0.2 + angleScore * 0.24 + centerScore * 0.1 + appearanceScore * 0.28
+  return geometryScore * 0.7 + appearanceScore * 0.3
 }
 
 function scoreWarpedAppearance(video, quad) {
@@ -659,11 +897,20 @@ function mapVideoQuadToElement(quad, video, width, height) {
   }))
 }
 
-function isSimilarQuad(a, b, video) {
+function isSimilarQuad(a, b, video, tolerance = 0.04) {
   if (!a || !b) return false
   const diag = Math.hypot(video.videoWidth, video.videoHeight)
   const avgDelta = a.reduce((sum, p, i) => sum + distance(p, b[i]), 0) / 4
-  return avgDelta / diag < 0.035
+  return avgDelta / diag < tolerance
+}
+
+function smoothQuad(previous, next, video) {
+  if (!previous || !isSimilarQuad(next, previous, video, 0.085)) return next
+  const keep = 0.62
+  return next.map((point, index) => ({
+    x: previous[index].x * keep + point.x * (1 - keep),
+    y: previous[index].y * keep + point.y * (1 - keep)
+  }))
 }
 
 function orderQuad(points) {
@@ -685,6 +932,16 @@ function rectangleAngleScore(points) {
     scores.push(1 - Math.min(1, Math.abs((v1.x * v2.x + v1.y * v2.y) / denom) / 0.35))
   }
   return scores.reduce((sum, v) => sum + v, 0) / scores.length
+}
+
+function polygonArea(points) {
+  let area = 0
+  for (let i = 0; i < points.length; i++) {
+    const current = points[i]
+    const next = points[(i + 1) % points.length]
+    area += current.x * next.y - next.x * current.y
+  }
+  return area / 2
 }
 
 function centerBiasScore(points, video) {
@@ -751,6 +1008,10 @@ async function recognizeDeed(dataUrl) {
     const d = json.deed
     deed.name = d.name ?? ''
     deed.price = d.price ?? null
+    deed.cardType = d.cardType === 'special' ? 'special' : 'deed'
+    deed.ruleKind = deed.cardType === 'special' ? normalizeRuleKind(d.ruleKind) : 'buildable'
+    deed.groupKey = d.groupKey ?? d.group_key ?? ''
+    applyRuleData(d.ruleData ?? d.rule_data ?? {})
     deed.buildUnitCost = d.buildUnitCost ?? null
     deed.rents = Array.from({ length: 6 }, (_, i) => d.rents?.[i] ?? null)
     phase.value = 'result'
@@ -769,6 +1030,7 @@ function reset() {
   isAutoCapturing.value = false
   lastQuad = null
   lastCandidate = null
+  missedFrames = 0
   clearError()
   resetDeed()
   phase.value = 'idle'
@@ -777,6 +1039,10 @@ function reset() {
 function resetDeed() {
   deed.name = ''
   deed.price = null
+  deed.cardType = 'deed'
+  deed.groupKey = ''
+  deed.ruleKind = 'buildable'
+  deed.ruleData = defaultRuleData()
   deed.buildUnitCost = null
   deed.rents = [null, null, null, null, null, null]
 }
@@ -804,10 +1070,80 @@ function confirm() {
   emit('deed-confirmed', {
     name: deed.name,
     price: deed.price,
+    cardType: deed.cardType,
+    groupKey: deed.groupKey,
+    ruleKind: deed.cardType === 'special' ? deed.ruleKind : 'buildable',
+    ruleData: normalizedRuleData(),
     buildUnitCost: deed.buildUnitCost,
     rents: [...deed.rents]
   })
   closeModal()
+}
+
+function defaultRuleData() {
+  return {
+    rentsByOwned: [null, null, null, null],
+    singleRent: null,
+    pairRent: null,
+    pairSize: 2,
+    multipliersByOwned: [null, null]
+  }
+}
+
+function normalizeRuleKind(value) {
+  return ['count_tier', 'pair_bonus', 'dice_multiplier'].includes(value) ? value : 'count_tier'
+}
+
+function normalizeArray(values, length) {
+  return Array.from({ length }, (_, i) => values?.[i] ?? null)
+}
+
+function applyRuleData(data) {
+  const next = defaultRuleData()
+  next.rentsByOwned = normalizeArray(data.rentsByOwned ?? data.rents ?? data.tiers ?? data.amounts, 4)
+  next.singleRent = data.singleRent ?? data.single ?? data.rent ?? data.rents?.[0] ?? null
+  next.pairRent = data.pairRent ?? data.bothRent ?? data.fullSetRent ?? data.rents?.[1] ?? null
+  next.pairSize = data.pairSize ?? data.setSize ?? 2
+  next.multipliersByOwned = normalizeArray(data.multipliersByOwned ?? data.multipliers ?? data.tiers, 2)
+  deed.ruleData = next
+}
+
+function onCardTypeChanged() {
+  if (deed.cardType === 'special') {
+    deed.ruleKind = normalizeRuleKind(deed.ruleKind)
+    if (!deed.groupKey) deed.groupKey = deed.name || ''
+  } else {
+    deed.ruleKind = 'buildable'
+    deed.groupKey = ''
+  }
+}
+
+function onRuleKindChanged() {
+  deed.ruleKind = normalizeRuleKind(deed.ruleKind)
+}
+
+function cleanNumber(value) {
+  const n = Math.floor(Number(value))
+  return Number.isFinite(n) && n >= 0 ? n : null
+}
+
+function cleanArray(values) {
+  return values.map(cleanNumber).filter(v => v != null)
+}
+
+function normalizedRuleData() {
+  if (deed.cardType !== 'special') return {}
+  if (deed.ruleKind === 'pair_bonus') {
+    return {
+      singleRent: cleanNumber(deed.ruleData.singleRent) ?? 0,
+      pairRent: cleanNumber(deed.ruleData.pairRent) ?? 0,
+      pairSize: Math.max(2, cleanNumber(deed.ruleData.pairSize) ?? 2)
+    }
+  }
+  if (deed.ruleKind === 'dice_multiplier') {
+    return { multipliersByOwned: cleanArray(deed.ruleData.multipliersByOwned) }
+  }
+  return { rentsByOwned: cleanArray(deed.ruleData.rentsByOwned) }
 }
 
 onBeforeUnmount(() => {
@@ -1202,6 +1538,9 @@ onBeforeUnmount(() => {
 .deed-input-num {
   width: 90px;
   flex: none;
+}
+.deed-select {
+  text-align: left;
 }
 .deed-price-wrap {
   display: flex;

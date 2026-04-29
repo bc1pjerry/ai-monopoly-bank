@@ -141,6 +141,14 @@
                   <span class="sd-price-label">每层加盖费用</span>
                   <span class="sd-price-val">{{ recognizedDeed.buildUnitCost != null ? `¥${fmt(recognizedDeed.buildUnitCost)}` : '—' }}</span>
                 </div>
+                <div class="sd-price-row">
+                  <span class="sd-price-label">卡片类型</span>
+                  <span class="sd-price-val">{{ recognizedDeed.cardType === 'special' ? '特殊资产' : '普通地契' }}</span>
+                </div>
+                <div v-if="recognizedDeed.cardType === 'special'" class="sd-price-row">
+                  <span class="sd-price-label">计费规则</span>
+                  <span class="sd-price-val">{{ specialRuleLabels[recognizedDeed.ruleKind] || '特殊规则' }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -274,12 +282,13 @@
               <div class="deed-card-left">
                 <div class="deed-card-name-row">
                   <span class="deed-card-name">{{ prop.name }}</span>
+                  <span v-if="!isBuildableProperty(prop)" class="deed-special-badge">特殊</span>
                   <span v-if="prop.mortgaged" class="deed-mortgaged-badge">已抵押</span>
                 </div>
-                <div class="deed-card-price">购入价 ¥{{ fmt(prop.price) }}</div>
+                <div class="deed-card-price">{{ propertyCardTypeLabel(prop) }} · 购入价 ¥{{ fmt(prop.price) }}</div>
               </div>
               <div class="deed-card-right">
-                <div class="deed-card-rent-preview" v-if="!prop.mortgaged && currentRent(prop) != null">
+                <div class="deed-card-rent-preview" v-if="!prop.mortgaged && Number.isFinite(currentRent(prop))">
                   {{ currentRentLabel(prop) }} ¥{{ fmt(currentRent(prop)) }}
                 </div>
                 <svg viewBox="0 0 16 16" fill="none" class="deed-card-chevron">
@@ -460,12 +469,12 @@
             <button class="sheet-close" @click="showBuildPicker = false">✕</button>
           </div>
           <div class="sheet-body">
-            <div v-if="myProperties.length === 0" class="build-picker-empty">
-              <p>你还没有地产，无法建房。</p>
+            <div v-if="myBuildableProperties.length === 0" class="build-picker-empty">
+              <p>你还没有可建房地契，无法建房。</p>
             </div>
             <div v-else class="build-picker-list">
               <div
-                v-for="prop in myProperties"
+                v-for="prop in myBuildableProperties"
                 :key="prop.id"
                 class="build-picker-item"
                 :class="{ active: buildTargetProp && buildTargetProp.id === prop.id }"
@@ -527,7 +536,7 @@
                 v-for="prop in transferProperties"
                 :key="prop.id"
                 :class="{ active: transferReason === prop.id }"
-                @click="selectTransferReason(prop.id, prop.mortgaged ? 0 : currentRent(prop)); showTransferSheet = false;"
+                @click="selectPropertyTransfer(prop)"
               >
                 <div class="build-picker-left">
                   <div class="build-picker-name" style="display:flex; align-items:center; gap:6px;">
@@ -537,7 +546,7 @@
                   <div class="build-picker-sub">过路费 ({{ currentRentLabel(prop) }})</div>
                 </div>
                 <div class="build-picker-rents">
-                   <div class="build-rent-chip">¥{{ prop.mortgaged ? '0' : fmt(currentRent(prop)) }}</div>
+                   <div class="build-rent-chip">{{ prop.mortgaged ? '¥0' : (Number.isFinite(currentRent(prop)) ? `¥${fmt(currentRent(prop))}` : '手动输入') }}</div>
                 </div>
                 <svg v-if="transferReason === prop.id" class="build-picker-check" viewBox="0 0 20 20" fill="currentColor">
                   <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
@@ -612,14 +621,26 @@
                   <span class="sd-price-val">¥{{ fmt(deedDetailProp.price) }}</span>
                 </div>
                 <div class="sd-price-row">
+                  <span class="sd-price-label">卡片类型</span>
+                  <span class="sd-price-val">{{ propertyCardTypeLabel(deedDetailProp) }}</span>
+                </div>
+                <div v-if="!isBuildableProperty(deedDetailProp)" class="sd-price-row">
+                  <span class="sd-price-label">同类分组</span>
+                  <span class="sd-price-val">{{ deedDetailProp.group_key || '—' }}</span>
+                </div>
+                <div v-if="!isBuildableProperty(deedDetailProp)" class="sd-price-row">
+                  <span class="sd-price-label">计费规则</span>
+                  <span class="sd-price-val">{{ specialRuleLabels[propertyRuleKind(deedDetailProp)] || '特殊规则' }}</span>
+                </div>
+                <div v-if="isBuildableProperty(deedDetailProp)" class="sd-price-row">
                   <span class="sd-price-label">已建楼栋</span>
                   <span class="sd-price-val">{{ propertyLevelLabel(deedDetailProp) }}</span>
                 </div>
-                <div class="sd-price-row">
+                <div v-if="isBuildableProperty(deedDetailProp)" class="sd-price-row">
                   <span class="sd-price-label">每层加盖费用</span>
                   <span class="sd-price-val">¥{{ fmt(buildUnitCostForProperty(deedDetailProp)) }}</span>
                 </div>
-                <div class="sd-price-row">
+                <div v-if="isBuildableProperty(deedDetailProp)" class="sd-price-row">
                   <span class="sd-price-label">已累计加盖金额</span>
                   <span class="sd-price-val">¥{{ fmt(Number(deedDetailProp.build_cost || 0)) }}</span>
                 </div>
@@ -635,7 +656,7 @@
               </div>
               <!-- 过路费表格 -->
               <div class="sd-rents-title">过路费一览</div>
-              <div class="sd-rents-table">
+              <div v-if="isBuildableProperty(deedDetailProp)" class="sd-rents-table">
                 <div
                   class="sd-rent-row"
                   v-for="(label, i) in rentLabels"
@@ -648,6 +669,21 @@
                   </div>
                   <span class="sd-rent-amount" :class="{ 'sd-rent-amount--hotel': i === 5, 'sd-rent-amount--mortgaged': deedDetailProp.mortgaged }">
                     {{ deedDetailProp.mortgaged ? '¥0' : (parsedRents(deedDetailProp)[i] != null ? '¥' + fmt(parsedRents(deedDetailProp)[i]) : '—') }}
+                  </span>
+                </div>
+              </div>
+              <div v-else class="sd-rents-table">
+                <div
+                  class="sd-rent-row"
+                  v-for="row in specialRuleRows(deedDetailProp)"
+                  :key="row.label"
+                  :class="{ 'sd-rent-row--highlight': row.active }"
+                >
+                  <div class="sd-rent-level">
+                    <span class="sd-rent-label-text">{{ row.label }}</span>
+                  </div>
+                  <span class="sd-rent-amount" :class="{ 'sd-rent-amount--mortgaged': deedDetailProp.mortgaged }">
+                    {{ deedDetailProp.mortgaged ? '¥0' : row.value }}
                   </span>
                 </div>
               </div>
@@ -685,7 +721,7 @@
                   </button>
                 </div>
                 <!-- 出售房产按钮行（有建房时显示） -->
-                <div v-if="!deedDetailProp.mortgaged && Number(deedDetailProp.build_count || 0) > 0" class="sd-sell-building-row">
+                <div v-if="isBuildableProperty(deedDetailProp) && !deedDetailProp.mortgaged && Number(deedDetailProp.build_count || 0) > 0" class="sd-sell-building-row">
                   <button class="sd-sell-building-btn" @click="startSellBuilding">
                     <svg viewBox="0 0 24 24" fill="none" class="sd-sell-icon">
                       <rect x="3" y="12" width="8" height="9" rx="1.2" stroke="currentColor" stroke-width="1.8" fill="currentColor" fill-opacity="0.1"/>
@@ -754,6 +790,55 @@
                 </label>
 
                 <label class="sd-edit-field">
+                  <span class="sd-edit-label">卡片类型</span>
+                  <select class="sd-edit-input" v-model="editDeedCardType" @change="editDeedRuleKind = editDeedCardType === 'special' ? 'count_tier' : 'buildable'">
+                    <option value="deed">普通地契</option>
+                    <option value="special">特殊资产</option>
+                  </select>
+                </label>
+
+                <template v-if="editDeedCardType === 'special'">
+                  <label class="sd-edit-field">
+                    <span class="sd-edit-label">同类分组</span>
+                    <input class="sd-edit-input sd-edit-input--text" v-model.trim="editDeedGroupKey" maxlength="30" placeholder="如：铁路 / 车站 / 港口" />
+                  </label>
+                  <label class="sd-edit-field">
+                    <span class="sd-edit-label">计费规则</span>
+                    <select class="sd-edit-input" v-model="editDeedRuleKind">
+                      <option value="count_tier">同类越多越贵</option>
+                      <option value="pair_bonus">两张成套高额</option>
+                      <option value="dice_multiplier">骰点乘倍数</option>
+                    </select>
+                  </label>
+                  <div v-if="editDeedRuleKind === 'count_tier'" class="sd-edit-rents">
+                    <div class="sd-edit-section-title">同类过路费</div>
+                    <label v-for="(_, i) in editDeedRuleData.rentsByOwned" :key="`edit-tier-${i}`" class="sd-edit-rent-row">
+                      <span class="sd-edit-rent-label">持有 {{ i + 1 }} 张</span>
+                      <input class="sd-edit-input sd-edit-input--rent" type="number" min="0" step="1" v-model.number="editDeedRuleData.rentsByOwned[i]" />
+                    </label>
+                  </div>
+                  <div v-else-if="editDeedRuleKind === 'pair_bonus'" class="sd-edit-rents">
+                    <div class="sd-edit-section-title">成套过路费</div>
+                    <label class="sd-edit-rent-row">
+                      <span class="sd-edit-rent-label">单张过路费</span>
+                      <input class="sd-edit-input sd-edit-input--rent" type="number" min="0" step="1" v-model.number="editDeedRuleData.singleRent" />
+                    </label>
+                    <label class="sd-edit-rent-row">
+                      <span class="sd-edit-rent-label">成套过路费</span>
+                      <input class="sd-edit-input sd-edit-input--rent" type="number" min="0" step="1" v-model.number="editDeedRuleData.pairRent" />
+                    </label>
+                  </div>
+                  <div v-else-if="editDeedRuleKind === 'dice_multiplier'" class="sd-edit-rents">
+                    <div class="sd-edit-section-title">骰点倍数</div>
+                    <label v-for="(_, i) in editDeedRuleData.multipliersByOwned" :key="`edit-mult-${i}`" class="sd-edit-rent-row">
+                      <span class="sd-edit-rent-label">持有 {{ i + 1 }} 张</span>
+                      <input class="sd-edit-input sd-edit-input--rent" type="number" min="0" step="1" v-model.number="editDeedRuleData.multipliersByOwned[i]" />
+                    </label>
+                  </div>
+                </template>
+
+                <template v-else>
+                <label class="sd-edit-field">
                   <span class="sd-edit-label">每层加盖费用</span>
                   <input class="sd-edit-input" type="number" min="0" step="1" v-model.number="editDeedBuildUnitCost" placeholder="输入每层加盖费用" />
                 </label>
@@ -770,6 +855,7 @@
                     <input class="sd-edit-input sd-edit-input--rent" type="number" min="0" step="1" v-model.number="editDeedRents[i]" :placeholder="`输入${label}过路费`" />
                   </label>
                 </div>
+                </template>
               </div>
               <div class="sell-actions">
                 <button class="sell-back-btn" @click="sellStep = 'detail'">
@@ -1198,12 +1284,47 @@ const myTotalAssets = computed(() => Number(me.value?.balance || 0) + myProperty
 
 // ─── 地产 tab ─────────────────────────────────────────────────────────────────
 const myProperties = computed(() => getPlayerProperties(props.myPlayerId))
+const myBuildableProperties = computed(() => myProperties.value.filter(isBuildableProperty))
 
 const rentLabels = ['空地', '1 栋房屋', '2 栋房屋', '3 栋房屋', '4 栋房屋', '酒店']
 const rentIcons  = ['🏚️', '🏠', '🏠', '🏠', '🏠', '🏨']
+const specialRuleLabels = {
+  count_tier: '同类越多越贵',
+  pair_bonus: '两张成套高额',
+  dice_multiplier: '骰点乘倍数',
+  buildable: '普通地契'
+}
 const showDeedOcr = ref(false)
 const deedOcrTarget = ref('buy')
 const recognizedDeed = ref(null)
+
+function propertyRuleKind(prop) {
+  return prop?.rule_kind || prop?.ruleKind || 'buildable'
+}
+
+function isBuildableProperty(prop) {
+  return propertyRuleKind(prop) === 'buildable'
+}
+
+function propertyCardTypeLabel(prop) {
+  return isBuildableProperty(prop) ? '普通地契' : '特殊资产'
+}
+
+function parsedRuleData(prop) {
+  const data = prop?.rule_data ?? prop?.ruleData ?? {}
+  if (data && typeof data === 'object') return data
+  try { return JSON.parse(data) } catch { return {} }
+}
+
+function propertyGroupKey(prop) {
+  return String(prop?.group_key || prop?.groupKey || prop?.name || '').trim()
+}
+
+function getOwnedGroupCount(prop) {
+  const key = propertyGroupKey(prop)
+  if (!key) return 1
+  return getPlayerProperties(prop.player_id).filter(p => propertyGroupKey(p) === key && propertyRuleKind(p) === propertyRuleKind(prop)).length || 1
+}
 
 function parsedRents(prop) {
   try {
@@ -1222,6 +1343,7 @@ function buildUnitCostForProperty(prop) {
 }
 
 function propertyLevelLabel(prop) {
+  if (!isBuildableProperty(prop)) return propertyCardTypeLabel(prop)
   const buildCount = Number(prop?.build_count || 0)
   if (buildCount <= 0) return '未建房'
   if (buildCount >= 5) return '酒店'
@@ -1229,15 +1351,61 @@ function propertyLevelLabel(prop) {
 }
 
 function currentRentIndex(prop) {
+  if (!isBuildableProperty(prop)) return Math.max(0, getOwnedGroupCount(prop) - 1)
   return Math.min(5, Math.max(0, Number(prop?.build_count || 0)))
 }
 
 function currentRent(prop) {
+  if (!prop) return null
+  if (prop.mortgaged) return 0
+  const ruleKind = propertyRuleKind(prop)
+  if (ruleKind === 'count_tier') {
+    const rents = parsedRuleData(prop).rentsByOwned || []
+    if (!rents.length) return null
+    return Number(rents[Math.min(getOwnedGroupCount(prop) - 1, rents.length - 1)])
+  }
+  if (ruleKind === 'pair_bonus') {
+    const data = parsedRuleData(prop)
+    const pairSize = Math.max(2, Number(data.pairSize || 2))
+    return getOwnedGroupCount(prop) >= pairSize ? Number(data.pairRent || 0) : Number(data.singleRent || 0)
+  }
+  if (ruleKind === 'dice_multiplier') return null
   return parsedRents(prop)[currentRentIndex(prop)]
 }
 
 function currentRentLabel(prop) {
+  const ruleKind = propertyRuleKind(prop)
+  if (ruleKind === 'count_tier') return `持有 ${getOwnedGroupCount(prop)} 张`
+  if (ruleKind === 'pair_bonus') return getOwnedGroupCount(prop) >= Math.max(2, Number(parsedRuleData(prop).pairSize || 2)) ? '成套' : '单张'
+  if (ruleKind === 'dice_multiplier') return `持有 ${getOwnedGroupCount(prop)} 张倍数`
   return rentLabels[currentRentIndex(prop)]
+}
+
+function specialRuleRows(prop) {
+  const ruleKind = propertyRuleKind(prop)
+  const data = parsedRuleData(prop)
+  if (ruleKind === 'count_tier') {
+    return (data.rentsByOwned || []).map((amount, i) => ({
+      label: `持有 ${i + 1} 张`,
+      value: `¥${fmt(amount)}`,
+      active: i === currentRentIndex(prop)
+    }))
+  }
+  if (ruleKind === 'pair_bonus') {
+    const pairSize = Math.max(2, Number(data.pairSize || 2))
+    return [
+      { label: '单张', value: `¥${fmt(data.singleRent || 0)}`, active: getOwnedGroupCount(prop) < pairSize },
+      { label: `${pairSize} 张成套`, value: `¥${fmt(data.pairRent || 0)}`, active: getOwnedGroupCount(prop) >= pairSize }
+    ]
+  }
+  if (ruleKind === 'dice_multiplier') {
+    return (data.multipliersByOwned || []).map((amount, i) => ({
+      label: `持有 ${i + 1} 张`,
+      value: `骰点 × ${fmt(amount)}`,
+      active: i === currentRentIndex(prop)
+    }))
+  }
+  return []
 }
 
 const deedDetailProp = ref(null)
@@ -1311,6 +1479,10 @@ const editDeedBuildCost = ref(null)
 const editDeedRents = ref(Array(6).fill(null))
 const editDeedLoading = ref(false)
 const editDeedName = ref('')
+const editDeedCardType = ref('deed')
+const editDeedGroupKey = ref('')
+const editDeedRuleKind = ref('buildable')
+const editDeedRuleData = ref(defaultSpecialRuleData())
 
 const pendingPropertySales = computed(() => Array.isArray(props.room.config?.pendingPropertySales) ? props.room.config.pendingPropertySales : [])
 const incomingPropertySales = computed(() => pendingPropertySales.value.filter(sale => sale.buyerId === props.myPlayerId))
@@ -1333,6 +1505,10 @@ function resetEditDeedForm(prop) {
     editDeedRents.value = Array(6).fill(null)
     editDeedLoading.value = false
     editDeedName.value = ''
+    editDeedCardType.value = 'deed'
+    editDeedGroupKey.value = ''
+    editDeedRuleKind.value = 'buildable'
+    editDeedRuleData.value = defaultSpecialRuleData()
     return
   }
   editDeedName.value = String(prop.name || '')
@@ -1340,7 +1516,54 @@ function resetEditDeedForm(prop) {
   editDeedBuildUnitCost.value = buildUnitCostForProperty(prop)
   editDeedBuildCost.value = Number(prop.build_cost || 0)
   editDeedRents.value = parsedRents(prop).map(v => (v == null ? 0 : Number(v)))
+  editDeedCardType.value = isBuildableProperty(prop) ? 'deed' : 'special'
+  editDeedGroupKey.value = prop.group_key || ''
+  editDeedRuleKind.value = isBuildableProperty(prop) ? 'buildable' : propertyRuleKind(prop)
+  editDeedRuleData.value = hydrateSpecialRuleData(parsedRuleData(prop))
   editDeedLoading.value = false
+}
+
+function defaultSpecialRuleData() {
+  return {
+    rentsByOwned: [null, null, null, null],
+    singleRent: null,
+    pairRent: null,
+    pairSize: 2,
+    multipliersByOwned: [null, null]
+  }
+}
+
+function hydrateSpecialRuleData(data = {}) {
+  const next = defaultSpecialRuleData()
+  next.rentsByOwned = Array.from({ length: 4 }, (_, i) => (data.rentsByOwned || data.rents || data.tiers || [])[i] ?? null)
+  next.singleRent = data.singleRent ?? data.single ?? data.rent ?? data.rents?.[0] ?? null
+  next.pairRent = data.pairRent ?? data.bothRent ?? data.fullSetRent ?? data.rents?.[1] ?? null
+  next.pairSize = data.pairSize ?? data.setSize ?? 2
+  next.multipliersByOwned = Array.from({ length: 2 }, (_, i) => (data.multipliersByOwned || data.multipliers || [])[i] ?? null)
+  return next
+}
+
+function cleanSpecialAmount(value) {
+  const n = normalizeWholeAmount(value)
+  return Number.isFinite(n) && n >= 0 ? n : null
+}
+
+function cleanSpecialArray(values) {
+  return values.map(cleanSpecialAmount).filter(v => v != null)
+}
+
+function normalizedSpecialRuleData(ruleKind, source = editDeedRuleData.value) {
+  if (ruleKind === 'pair_bonus') {
+    return {
+      singleRent: cleanSpecialAmount(source.singleRent) ?? 0,
+      pairRent: cleanSpecialAmount(source.pairRent) ?? 0,
+      pairSize: Math.max(2, cleanSpecialAmount(source.pairSize) ?? 2)
+    }
+  }
+  if (ruleKind === 'dice_multiplier') {
+    return { multipliersByOwned: cleanSpecialArray(source.multipliersByOwned) }
+  }
+  return { rentsByOwned: cleanSpecialArray(source.rentsByOwned) }
 }
 
 function startEditDeed() {
@@ -1364,11 +1587,15 @@ function normalizedRents(values, fallback = 0) {
 async function submitEditDeed() {
   if (editDeedLoading.value || !deedDetailProp.value) return
   const name = editDeedName.value.trim()
+  const cardType = editDeedCardType.value === 'special' ? 'special' : 'deed'
+  const ruleKind = cardType === 'special' ? (['count_tier', 'pair_bonus', 'dice_multiplier'].includes(editDeedRuleKind.value) ? editDeedRuleKind.value : 'count_tier') : 'buildable'
 
   const price = normalizeWholeAmount(editDeedPrice.value)
-  const buildUnitCost = normalizeWholeAmount(editDeedBuildUnitCost.value)
-  const buildCost = normalizeWholeAmount(editDeedBuildCost.value)
-  const rents = editDeedRents.value.map(normalizeWholeAmount)
+  const buildUnitCost = ruleKind === 'buildable' ? normalizeWholeAmount(editDeedBuildUnitCost.value) : 0
+  const buildCost = ruleKind === 'buildable' ? normalizeWholeAmount(editDeedBuildCost.value) : 0
+  const rents = ruleKind === 'buildable' ? editDeedRents.value.map(normalizeWholeAmount) : Array(6).fill(0)
+  const ruleData = ruleKind === 'buildable' ? {} : normalizedSpecialRuleData(ruleKind)
+  const groupKey = ruleKind === 'buildable' ? '' : editDeedGroupKey.value.trim()
 
   if (!name) return alert('请输入地产名称')
   if (price < 0 || buildUnitCost < 0 || buildCost < 0 || !Number.isFinite(price) || !Number.isFinite(buildUnitCost) || !Number.isFinite(buildCost)) {
@@ -1377,13 +1604,17 @@ async function submitEditDeed() {
   if (rents.length !== 6 || rents.some(v => v < 0 || !Number.isFinite(v))) {
     return alert('请填写 6 档非负整数过路费')
   }
+  if (ruleKind !== 'buildable' && !groupKey) return alert('请输入同类分组')
+  if (ruleKind === 'count_tier' && !ruleData.rentsByOwned.length) return alert('请填写至少 1 档同类过路费')
+  if (ruleKind === 'pair_bonus' && !(ruleData.pairRent > 0)) return alert('请填写成套过路费')
+  if (ruleKind === 'dice_multiplier' && !ruleData.multipliersByOwned.length) return alert('请填写至少 1 档骰点倍数')
 
   editDeedLoading.value = true
   try {
     const propId = deedDetailProp.value.id
     const res = await apiWithToken(`/api/rooms/${props.room.id}/action`, props.myToken, {
       method: 'POST',
-      body: { type: 'update-property', propertyId: propId, name, price, buildUnitCost, buildCost, rents }
+      body: { type: 'update-property', propertyId: propId, name, price, buildUnitCost, buildCost, rents, cardType, groupKey, ruleKind, ruleData }
     })
     const updatedProp = (res.room.properties || []).find(p => p.id === propId) || null
     deedDetailProp.value = updatedProp
@@ -1489,6 +1720,15 @@ function selectTransferReason(reason, rentAmount = 0) {
     nextTick(() => {
       transferNumPad.value?.openModal()
     })
+  }
+}
+
+function selectPropertyTransfer(prop) {
+  const rent = prop.mortgaged ? 0 : currentRent(prop)
+  selectTransferReason(prop.id, Number.isFinite(rent) ? rent : 0)
+  showTransferSheet.value = false
+  if (!prop.mortgaged && !Number.isFinite(rent)) {
+    nextTick(() => transferNumPad.value?.openModal())
   }
 }
 
@@ -1666,6 +1906,10 @@ function onDeedConfirmed(deed) {
   if (deedOcrTarget.value === 'edit') {
     editDeedName.value = deed.name?.trim?.() || editDeedName.value
     editDeedPrice.value = deed.price ?? editDeedPrice.value
+    editDeedCardType.value = deed.cardType === 'special' ? 'special' : 'deed'
+    editDeedGroupKey.value = deed.groupKey ?? editDeedGroupKey.value
+    editDeedRuleKind.value = editDeedCardType.value === 'special' ? (deed.ruleKind || 'count_tier') : 'buildable'
+    editDeedRuleData.value = hydrateSpecialRuleData(deed.ruleData || {})
     editDeedBuildUnitCost.value = deed.buildUnitCost ?? editDeedBuildUnitCost.value
     editDeedRents.value = Array.from({ length: 6 }, (_, i) => deed.rents?.[i] ?? editDeedRents.value[i] ?? null)
   } else {
@@ -1807,14 +2051,26 @@ async function submitFine() {
     if (fineType.value === 'buy-land') {
       const propertyPrice = normalizeWholeAmount(recognizedDeed.value?.price ?? fineAmount.value)
       const property = recognizedDeed.value
-        ? {
+          ? {
             name: recognizedDeed.value.name?.trim?.() || '',
             price: propertyPrice,
+            cardType: recognizedDeed.value.cardType === 'special' ? 'special' : 'deed',
+            groupKey: recognizedDeed.value.groupKey || '',
+            ruleKind: recognizedDeed.value.cardType === 'special' ? (recognizedDeed.value.ruleKind || 'count_tier') : 'buildable',
+            ruleData: recognizedDeed.value.cardType === 'special'
+              ? normalizedSpecialRuleData(recognizedDeed.value.ruleKind || 'count_tier', hydrateSpecialRuleData(recognizedDeed.value.ruleData || {}))
+              : {},
             buildUnitCost: normalizeWholeAmount(recognizedDeed.value.buildUnitCost ?? 0),
             rents: normalizedRents(recognizedDeed.value.rents, 0)
           }
         : null
       if (propertyPrice < 0 || !Number.isFinite(propertyPrice)) return alert('请输入正确金额')
+      if (property?.cardType === 'special') {
+        if (!property.groupKey) return alert('请填写特殊资产的同类分组')
+        if (property.ruleKind === 'count_tier' && !property.ruleData.rentsByOwned.length) return alert('请填写至少 1 档同类过路费')
+        if (property.ruleKind === 'pair_bonus' && !(property.ruleData.pairRent > 0)) return alert('请填写成套过路费')
+        if (property.ruleKind === 'dice_multiplier' && !property.ruleData.multipliersByOwned.length) return alert('请填写至少 1 档骰点倍数')
+      }
 
       const res = await apiWithToken(`/api/rooms/${props.room.id}/action`, props.myToken, {
         method: 'POST',
@@ -2577,6 +2833,19 @@ async function submitRepay(loan) {
 .property-price {
   color: #a78bfa;
   font-weight: 600;
+}
+
+.deed-special-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(6,182,212,.14);
+  border: 1px solid rgba(6,182,212,.28);
+  color: #67e8f9;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
 }
 
 /* ── 地产 tab ── */

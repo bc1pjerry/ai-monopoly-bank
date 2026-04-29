@@ -2,7 +2,7 @@
  * AI Gateway — 代理到小米 Mimo 模型
  *
  * Base URL : https://token-plan-cn.xiaomimimo.com/v1
- * Model    : mimo-v2-omni
+ * Model    : MiMo-V2.5
  * Auth     : Bearer $XIAOMI_API_KEY
  * 注意     : 图片必须是 JPEG/JPG 格式的 base64，PNG 会被拒绝（400）
  *            参数用 max_completion_tokens，不是 max_tokens
@@ -20,7 +20,7 @@ const fs    = require('fs');
 const path  = require('path');
 
 const XIAOMI_BASE_URL = 'https://api.xiaomimimo.com/v1';
-const DEFAULT_MODEL   = 'mimo-v2-omni';
+const DEFAULT_MODEL   = 'mimo-v2.5';
 
 // ─── 文件日志工具 ──────────────────────────────────────────────────────────────
 
@@ -221,7 +221,7 @@ async function chat(messages, options = {}) {
   const resp = await callChatCompletion(messages, options);
   const msg = resp.choices?.[0]?.message;
   if (!msg) throw new Error('响应中未找到 message: ' + JSON.stringify(resp));
-  // mimo-v2-omni 是思考型模型，content 可能为空，回答在 reasoning_content 末尾
+  // 部分思考型模型 content 可能为空，回答在 reasoning_content 末尾
   const text = (msg.content && msg.content.trim()) ? msg.content : (msg.reasoning_content || '');
   if (!text) throw new Error('content 与 reasoning_content 均为空');
   return text;

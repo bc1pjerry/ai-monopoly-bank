@@ -59,7 +59,8 @@ db.exec(`
     name     TEXT NOT NULL,
     balance  INTEGER NOT NULL,
     token    TEXT NOT NULL,
-    avatar_id INTEGER NOT NULL DEFAULT 1
+    avatar_id INTEGER NOT NULL DEFAULT 1,
+    joined_at INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS logs (
@@ -81,6 +82,10 @@ db.exec(`
     name        TEXT NOT NULL,
     price       INTEGER NOT NULL,
     rents       TEXT NOT NULL,
+    card_type   TEXT NOT NULL DEFAULT 'deed',
+    group_key   TEXT NOT NULL DEFAULT '',
+    rule_kind   TEXT NOT NULL DEFAULT 'buildable',
+    rule_data   TEXT NOT NULL DEFAULT '{}',
     mortgaged   INTEGER NOT NULL DEFAULT 0,
     build_count INTEGER NOT NULL DEFAULT 0,
     build_unit_cost INTEGER NOT NULL DEFAULT 0,
@@ -122,6 +127,10 @@ try { db.exec(`ALTER TABLE properties ADD COLUMN mortgaged INTEGER NOT NULL DEFA
 try { db.exec(`ALTER TABLE properties ADD COLUMN build_count INTEGER NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE properties ADD COLUMN build_unit_cost INTEGER NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE properties ADD COLUMN build_cost INTEGER NOT NULL DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE properties ADD COLUMN card_type TEXT NOT NULL DEFAULT 'deed'`); } catch {}
+try { db.exec(`ALTER TABLE properties ADD COLUMN group_key TEXT NOT NULL DEFAULT ''`); } catch {}
+try { db.exec(`ALTER TABLE properties ADD COLUMN rule_kind TEXT NOT NULL DEFAULT 'buildable'`); } catch {}
+try { db.exec(`ALTER TABLE properties ADD COLUMN rule_data TEXT NOT NULL DEFAULT '{}'`); } catch {}
 try { db.exec(`CREATE TABLE IF NOT EXISTS deposits (id TEXT PRIMARY KEY, player_id TEXT NOT NULL, room_id TEXT NOT NULL, amount INTEGER NOT NULL, created_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'active')`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_deposits_room ON deposits(room_id)`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_deposits_player ON deposits(player_id)`); } catch {}
@@ -129,6 +138,7 @@ try { db.exec(`CREATE TABLE IF NOT EXISTS loans (id TEXT PRIMARY KEY, player_id 
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_loans_room ON loans(room_id)`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_loans_player ON loans(player_id)`); } catch {}
 try { db.exec(`ALTER TABLE players ADD COLUMN avatar_id INTEGER NOT NULL DEFAULT 1`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN joined_at INTEGER`); } catch {}
 
 // ─── 修复旧数据：status 列新增前暂停的房间仍为 active，根据日志修正 ──────────
 try {
@@ -158,6 +168,9 @@ const stmts = {
   updatePlayer: db.prepare(
     'UPDATE players SET name = ?, balance = ?, avatar_id = ? WHERE id = ?'
   ),
+  markPlayerJoined: db.prepare(
+    'UPDATE players SET joined_at = COALESCE(joined_at, ?) WHERE id = ? AND room_id = ?'
+  ),
   insertLog: db.prepare(
     'INSERT INTO logs (id, room_id, ts, type, text, note) VALUES (?, ?, ?, ?, ?, ?)'
   ),
@@ -174,14 +187,14 @@ const stmts = {
   deletePlayers: db.prepare('DELETE FROM players WHERE room_id = ?'),
   deleteLogs: db.prepare('DELETE FROM logs WHERE room_id = ?'),
   insertProperty: db.prepare(
-    'INSERT INTO properties (id, player_id, room_id, name, price, rents, mortgaged, build_count, build_unit_cost, build_cost, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, 0, ?)'
+    'INSERT INTO properties (id, player_id, room_id, name, price, rents, card_type, group_key, rule_kind, rule_data, mortgaged, build_count, build_unit_cost, build_cost, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, 0, ?)'
   ),
   getProperties: db.prepare('SELECT * FROM properties WHERE room_id = ? ORDER BY created_at DESC'),
   getPlayerProperties: db.prepare('SELECT * FROM properties WHERE player_id = ? ORDER BY created_at DESC'),
   deleteProperties: db.prepare('DELETE FROM properties WHERE room_id = ?'),
   updatePropertyMortgaged: db.prepare('UPDATE properties SET mortgaged = ? WHERE id = ?'),
   updatePropertyBuild: db.prepare('UPDATE properties SET build_count = ?, build_cost = ? WHERE id = ?'),
-  updatePropertyDetails: db.prepare('UPDATE properties SET name = ?, price = ?, build_unit_cost = ?, build_cost = ?, rents = ? WHERE id = ?'),
+  updatePropertyDetails: db.prepare('UPDATE properties SET name = ?, price = ?, build_unit_cost = ?, build_cost = ?, rents = ?, card_type = ?, group_key = ?, rule_kind = ?, rule_data = ? WHERE id = ?'),
   updatePropertyOwner: db.prepare('UPDATE properties SET player_id = ? WHERE id = ?'),
 
   // deposits
@@ -215,6 +228,86 @@ function randomToken() {
 
 function propertyAssetValue(property) {
   return Number(property.price || 0) + Number(property.build_cost || 0);
+}
+
+function safeJsonParse(value, fallback) {
+  if (value && typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function compactKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .slice(0, 40);
+}
+
+function normalizeCardType(value) {
+  return value === 'special' ? 'special' : 'deed';
+}
+
+function normalizeRuleKind(value, cardType) {
+  const kind = String(value || '').trim();
+  if (['count_tier', 'pair_bonus', 'dice_multiplier'].includes(kind)) return kind;
+  return cardType === 'special' ? 'count_tier' : 'buildable';
+}
+
+function normalizeNonNegativeInt(value, fallback = 0) {
+  const normalized = Math.floor(Number(value));
+  return Number.isFinite(normalized) && normalized >= 0 ? normalized : fallback;
+}
+
+function normalizeAmountArray(values, fallback = []) {
+  return (Array.isArray(values) ? values : fallback)
+    .map(v => Math.floor(Number(v)))
+    .filter(v => Number.isFinite(v) && v >= 0)
+    .slice(0, 8);
+}
+
+function normalizeRuleData(ruleKind, rawData = {}) {
+  const data = rawData && typeof rawData === 'object' ? rawData : {};
+  if (ruleKind === 'pair_bonus') {
+    return {
+      singleRent: normalizeNonNegativeInt(data.singleRent ?? data.single ?? data.rent ?? data.rents?.[0]),
+      pairRent: normalizeNonNegativeInt(data.pairRent ?? data.bothRent ?? data.fullSetRent ?? data.rents?.[1]),
+      pairSize: Math.max(2, normalizeNonNegativeInt(data.pairSize ?? data.setSize, 2))
+    };
+  }
+  if (ruleKind === 'dice_multiplier') {
+    return {
+      multipliersByOwned: normalizeAmountArray(
+        data.multipliersByOwned ?? data.multipliers ?? data.tiers,
+        [4, 10]
+      )
+    };
+  }
+  if (ruleKind === 'count_tier') {
+    return {
+      rentsByOwned: normalizeAmountArray(
+        data.rentsByOwned ?? data.rents ?? data.tiers ?? data.amounts
+      )
+    };
+  }
+  return {};
+}
+
+function normalizePropertyCardFields(property = {}, amount = 0) {
+  const cardType = normalizeCardType(property.cardType ?? property.card_type);
+  const ruleKind = normalizeRuleKind(property.ruleKind ?? property.rule_kind, cardType);
+  const ruleData = normalizeRuleData(ruleKind, property.ruleData ?? property.rule_data);
+  const fallbackGroup = ruleKind === 'buildable' ? '' : (property.groupName || property.name || '');
+  return {
+    cardType,
+    groupKey: ruleKind === 'buildable' ? '' : compactKey(property.groupKey ?? property.group_key ?? fallbackGroup),
+    ruleKind,
+    ruleData,
+    price: Number.isFinite(Number(property.price)) ? Math.floor(Number(property.price)) : amount
+  };
 }
 
 function playerAvatarId(player, fallback = 1) {
@@ -389,7 +482,7 @@ function body(req) {
 
 // ─── 数据库操作 ──────────────────────────────────────────────────────────────
 
-function createRoom(playerCount, startingMoney, goSalary = 200, lotteryTicketPrice = 200, lotteryEnabled = true) {
+function createRoom(playerCount, startingMoney, goSalary = 200, lotteryTicketPrice = 200, lotteryEnabled = true, lotteryDrawIntervalMin = 30) {
   const roomId = randomId();
   const bankerToken = randomToken();
   const now = Date.now();
@@ -412,7 +505,8 @@ function createRoom(playerCount, startingMoney, goSalary = 200, lotteryTicketPri
     lastInterestAt: Date.now(),
     lottery: defaultLotteryConfig(now, {
       enabled: lotteryEnabled !== false,
-      ticketPrice: Number(lotteryTicketPrice)
+      ticketPrice: Number(lotteryTicketPrice),
+      drawIntervalMin: Number(lotteryDrawIntervalMin)
     })
   });
 
@@ -439,7 +533,11 @@ function getRoom(roomId, logLimit = 50, logOffset = 0) {
   const players = stmts.getPlayers.all(roomId).map((player, index) => attachAvatar(player, (index % AVATAR_COUNT) + 1));
   const properties = stmts.getProperties.all(roomId).map(p => ({
     ...p,
-    rents: JSON.parse(p.rents)
+    rents: safeJsonParse(p.rents, Array(6).fill(0)),
+    card_type: p.card_type || 'deed',
+    group_key: p.group_key || '',
+    rule_kind: p.rule_kind || 'buildable',
+    rule_data: safeJsonParse(p.rule_data, {})
   }));
   const deposits = stmts.getDeposits.all(roomId, 'active');
   const loans = stmts.getLoans.all(roomId, 'active');
@@ -491,6 +589,13 @@ function resolveIdentity(room, token) {
   const player = room.players.find(p => p.token === token);
   if (player) return { role: 'player', player };
   return null;
+}
+
+function markPlayerJoined(roomId, playerId) {
+  const existing = db.prepare('SELECT joined_at FROM players WHERE id = ? AND room_id = ?').get(playerId, roomId);
+  if (!existing || existing.joined_at) return false;
+  stmts.markPlayerJoined.run(Date.now(), playerId, roomId);
+  return true;
 }
 
 // ─── AI 调整存款利率 ──────────────────────────────────────────────────────────
@@ -718,7 +823,7 @@ const requestHandler = async (req, res) => {
 
   // ── 地契 OCR ─────────────────────────────────────────────────────────────────
   // POST /api/ocr/deed  { image: "data:image/jpeg;base64,..." }
-  // 返回: { ok: true, deed: { name, price, buildUnitCost, rents: [r0,r1,r2,r3,r4,r5] } }
+  // 返回: { ok: true, deed: { name, price, cardType, groupKey, ruleKind, ruleData, buildUnitCost, rents: [r0,r1,r2,r3,r4,r5] } }
   //   rents[0]=空地过路费, [1-4]=1-4栋房屋, [5]=酒店
   if (req.method === 'POST' && pathname === '/api/ocr/deed') {
     let reqBody;
@@ -739,32 +844,39 @@ const requestHandler = async (req, res) => {
           },
           {
             type: 'text',
-            text: `你正在识别一张中文版大富翁（Monopoly）桌游地契卡片。现在只重点识别以下 3 类关键信息：
-1. 地契名字
-2. 每层加盖所需金额（通常写作“房屋/楼房每幢”“每层加盖费用”等）
-3. 各档过路费（空地、1 层、2 层、3 层、4 层、酒店）
+            text: `你正在识别一张中文版大富翁（Monopoly）桌游资产卡片，可能是普通地契，也可能是铁路/车站/机场/港口/水电公司等特殊资产。请重点识别：
+1. 卡片名称
+2. 购入价格
+3. 卡片规则类型与过路费
+4. 如果是普通地契，识别每层加盖费用及各档过路费
 
 请仔细阅读卡片上的所有文字和数字，然后严格按照以下 JSON 格式输出，不要包含任何解释、注释或 markdown 代码块：
 
-{"name":"地产名称","price":购入价格数字或null,"buildUnitCost":每层加盖费用数字或null,"rents":[空地过路费,一幢房屋,两幢房屋,三幢房屋,四幢房屋,旅馆]}
+{"name":"卡片名称","price":购入价格数字或null,"cardType":"deed或special","groupKey":"同类资产分组名称或空字符串","ruleKind":"buildable或count_tier或pair_bonus或dice_multiplier","ruleData":{},"buildUnitCost":每层加盖费用数字或null,"rents":[空地过路费,一幢房屋,两幢房屋,三幢房屋,四幢房屋,旅馆]}
 
 识别规则：
-1. name：优先取卡片顶部彩色色块内、最醒目的地名文字（如"台北路"、"中山路"），原样输出，不要添加“路段”“地产”“地契”等后缀，也不要输出颜色或说明文字
+1. name：优先取卡片顶部或标题区域最醒目的名称（如"台北路"、"火车站"、"电力公司"），原样输出，不要添加“路段”“地产”“地契”等后缀，也不要输出颜色或说明文字
 2. price：卡片上标注的购买地产所需金额（整数，单位为游戏币"元"），若卡片未印购买价格则填 null
-3. buildUnitCost：提取“每层加盖费用/每幢房屋造价/楼房建筑费”对应的单层金额。只要卡片上表达的是“每加盖一次要多少钱”，都填到这个字段；若无法确认则填 null
-4. rents：严格按顺序提取 6 个过路费金额，均为整数，单位为游戏币"元"：
+3. 普通可建房地契：cardType 填 "deed"，ruleKind 填 "buildable"，groupKey 填空字符串，ruleData 填 {}。buildUnitCost 提取“每层加盖费用/每幢房屋造价/楼房建筑费”对应的单层金额；若无法确认则填 null
+4. 普通地契的 rents：严格按顺序提取 6 个过路费金额，均为整数，单位为游戏币"元"：
    - rents[0]：空地（无房屋时的过路费，通常最小）
    - rents[1]：建有 1 幢房屋时的过路费
    - rents[2]：建有 2 幢房屋时的过路费
    - rents[3]：建有 3 幢房屋时的过路费
    - rents[4]：建有 4 幢房屋时的过路费
    - rents[5]：建有旅馆（酒店）时的过路费（通常最大）
-5. 名称必须与卡片上的地契名一致；如果卡片上还有其它较大的宣传文字，忽略它们，不要误填到 name
-6. 若某个数字模糊或无法确认，填 null
-7. 所有数值只填纯整数，不要包含货币符号、逗号、单位或中文数字
+5. 特殊资产卡：cardType 填 "special"，buildUnitCost 填 null，rents 填 [null,null,null,null,null,null]
+6. 如果规则是“持有同类型越多，收租越多”（如车站/铁路/港口等），ruleKind 填 "count_tier"，groupKey 填该类型名称（如"铁路"、"车站"、"港口"），ruleData 填 {"rentsByOwned":[持有1张过路费,持有2张过路费,...]}
+7. 如果规则是“同组通常只有两个站点，两个都持有后获得巨额过路费”，ruleKind 填 "pair_bonus"，groupKey 填该类型名称，ruleData 填 {"singleRent":单张过路费,"pairRent":两张都持有过路费,"pairSize":2}
+8. 如果规则是“掷骰点数乘以倍数”，ruleKind 填 "dice_multiplier"，groupKey 填该类型名称，ruleData 填 {"multipliersByOwned":[持有1张倍数,持有2张倍数,...]}
+9. 名称必须与卡片上的名称一致；如果卡片上还有其它较大的宣传文字，忽略它们，不要误填到 name
+10. 若某个数字模糊或无法确认，填 null；数组中无法确认的值也填 null
+11. 所有数值只填纯整数，不要包含货币符号、逗号、单位或中文数字
 
 示例输出（仅格式参考，数字以实际卡片为准）：
-{"name":"台北路","price":60,"buildUnitCost":50,"rents":[2,10,30,90,160,250]}`
+{"name":"台北路","price":60,"cardType":"deed","groupKey":"","ruleKind":"buildable","ruleData":{},"buildUnitCost":50,"rents":[2,10,30,90,160,250]}
+{"name":"火车站","price":200,"cardType":"special","groupKey":"铁路","ruleKind":"count_tier","ruleData":{"rentsByOwned":[25,50,100,200]},"buildUnitCost":null,"rents":[null,null,null,null,null,null]}
+{"name":"南站","price":200,"cardType":"special","groupKey":"车站","ruleKind":"pair_bonus","ruleData":{"singleRent":50,"pairRent":300,"pairSize":2},"buildUnitCost":null,"rents":[null,null,null,null,null,null]}`
           }
         ]
       }
@@ -814,6 +926,11 @@ const requestHandler = async (req, res) => {
       deed.name = String(deed.name || '').trim();
       deed.price = deed.price == null ? null : (Number.isFinite(Math.floor(Number(deed.price))) ? Math.floor(Number(deed.price)) : null);
       deed.buildUnitCost = Number.isFinite(normalizedBuildUnitCost) ? normalizedBuildUnitCost : null;
+      const cardFields = normalizePropertyCardFields(deed, deed.price ?? 0);
+      deed.cardType = cardFields.cardType;
+      deed.groupKey = cardFields.groupKey;
+      deed.ruleKind = cardFields.ruleKind;
+      deed.ruleData = cardFields.ruleData;
       // 确保 rents 是长度为 6 的数组
       deed.rents = Array.from({ length: 6 }, (_, i) => {
         const value = Math.floor(Number(deed.rents?.[i]));
@@ -835,8 +952,9 @@ const requestHandler = async (req, res) => {
         const startingMoney = Math.max(0, Number(data.startingMoney || 1500));
         const goSalary = Math.max(0, Number(data.goSalary ?? 200));
         const lotteryTicketPrice = Math.max(0, Number(data.lotteryTicketPrice ?? 200));
+        const lotteryDrawIntervalMin = Math.max(1, Number(data.lotteryDrawIntervalMin ?? 30));
         const lotteryEnabled = data.lotteryEnabled !== false;
-        const room = createRoom(playerCount, startingMoney, goSalary, lotteryTicketPrice, lotteryEnabled);
+        const room = createRoom(playerCount, startingMoney, goSalary, lotteryTicketPrice, lotteryEnabled, lotteryDrawIntervalMin);
         return send(res, 200, {
           ok: true,
           roomId: room.id,
@@ -924,10 +1042,15 @@ const requestHandler = async (req, res) => {
       const token = reqUrl.searchParams.get('token');
       const identity = resolveIdentity(room, token);
       if (!identity) return send(res, 403, { ok: false, error: 'invalid_token' });
+      const playerJoined = identity.role === 'player' && markPlayerJoined(roomId, identity.player.id);
+      const currentRoom = playerJoined ? getRoom(roomId) : room;
+      if (playerJoined) {
+        broadcastRoom(roomId, { type: 'room_update', room: publicRoom(currentRoom) });
+      }
       const extra = identity.role === 'banker'
-        ? { playerTokens: room.players.map(p => ({ id: p.id, name: p.name, token: p.token })) }
+        ? { playerTokens: currentRoom.players.map(p => ({ id: p.id, name: p.name, token: p.token })) }
         : {};
-      return send(res, 200, { ok: true, identity: identity.role, playerId: identity.player?.id || null, ...extra, room: publicRoom(room) });
+      return send(res, 200, { ok: true, identity: identity.role, playerId: identity.player?.id || null, ...extra, room: publicRoom(currentRoom) });
     }
 
     // 分页获取流水记录
@@ -1044,8 +1167,18 @@ const requestHandler = async (req, res) => {
         const propertyId = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
         const property = reqBody.property || {};
         const propertyName = String(property.name || '').trim();
-        const propertyPrice = Number.isFinite(Number(property.price)) ? Math.floor(Number(property.price)) : amount;
-        const propertyBuildUnitCost = Number.isFinite(Number(property.buildUnitCost))
+        const cardFields = normalizePropertyCardFields(property, amount);
+        if (cardFields.ruleKind === 'count_tier' && !cardFields.ruleData.rentsByOwned.length) {
+          return send(res, 400, { ok: false, error: 'invalid_special_rule' });
+        }
+        if (cardFields.ruleKind === 'pair_bonus' && !(cardFields.ruleData.pairRent > 0)) {
+          return send(res, 400, { ok: false, error: 'invalid_special_rule' });
+        }
+        if (cardFields.ruleKind === 'dice_multiplier' && !cardFields.ruleData.multipliersByOwned.length) {
+          return send(res, 400, { ok: false, error: 'invalid_special_rule' });
+        }
+        const propertyPrice = cardFields.price;
+        const propertyBuildUnitCost = cardFields.ruleKind === 'buildable' && Number.isFinite(Number(property.buildUnitCost))
           ? Math.max(0, Math.floor(Number(property.buildUnitCost)))
           : 0;
         const propertyRents = Array.isArray(property.rents)
@@ -1061,6 +1194,10 @@ const requestHandler = async (req, res) => {
           propertyName,
           propertyPrice,
           JSON.stringify(propertyRents),
+          cardFields.cardType,
+          cardFields.groupKey,
+          cardFields.ruleKind,
+          JSON.stringify(cardFields.ruleData),
           propertyBuildUnitCost,
           Date.now()
         );
@@ -1076,6 +1213,7 @@ const requestHandler = async (req, res) => {
         const prop = room.properties.find(p => p.id === reqBody.propertyId);
         if (!prop) return send(res, 404, { ok: false, error: 'property_not_found' });
         if (prop.player_id !== player.id) return send(res, 403, { ok: false, error: 'forbidden' });
+        if ((prop.rule_kind || 'buildable') !== 'buildable') return send(res, 400, { ok: false, error: 'property_not_buildable' });
 
         const buildCount = Math.floor(Number(reqBody.buildCount || 0));
         if (!(buildCount > 0)) return send(res, 400, { ok: false, error: 'invalid_build_count' });
@@ -1108,6 +1246,7 @@ const requestHandler = async (req, res) => {
         const prop = room.properties.find(p => p.id === reqBody.propertyId);
         if (!prop) return send(res, 404, { ok: false, error: 'property_not_found' });
         if (prop.player_id !== player.id) return send(res, 403, { ok: false, error: 'forbidden' });
+        if ((prop.rule_kind || 'buildable') !== 'buildable') return send(res, 400, { ok: false, error: 'property_not_buildable' });
 
         const currentBuildCount = Number(prop.build_count || 0);
         if (currentBuildCount <= 0) return send(res, 400, { ok: false, error: 'no_buildings_to_sell' });
@@ -1148,10 +1287,13 @@ const requestHandler = async (req, res) => {
 
         const name = String(reqBody.name || '').trim();
         const price = Math.floor(Number(reqBody.price));
-        const buildUnitCost = Math.floor(Number(reqBody.buildUnitCost));
-        const buildCost = Math.floor(Number(reqBody.buildCost));
+        const cardFields = normalizePropertyCardFields(reqBody, price);
+        const buildUnitCost = cardFields.ruleKind === 'buildable' ? Math.floor(Number(reqBody.buildUnitCost)) : 0;
+        const buildCost = cardFields.ruleKind === 'buildable' ? Math.floor(Number(reqBody.buildCost)) : 0;
         const rentsRaw = Array.isArray(reqBody.rents) ? reqBody.rents : [];
-        const rents = rentsRaw.map(v => Math.floor(Number(v)));
+        const rents = cardFields.ruleKind === 'buildable'
+          ? rentsRaw.map(v => Math.floor(Number(v)))
+          : Array(6).fill(0);
 
         if (!name) {
           return send(res, 400, { ok: false, error: 'invalid_property_name' });
@@ -1162,8 +1304,28 @@ const requestHandler = async (req, res) => {
         if (rents.length !== 6 || rents.some(v => v < 0 || !Number.isFinite(v))) {
           return send(res, 400, { ok: false, error: 'invalid_property_rents' });
         }
+        if (cardFields.ruleKind === 'count_tier' && !cardFields.ruleData.rentsByOwned.length) {
+          return send(res, 400, { ok: false, error: 'invalid_special_rule' });
+        }
+        if (cardFields.ruleKind === 'pair_bonus' && !(cardFields.ruleData.pairRent > 0)) {
+          return send(res, 400, { ok: false, error: 'invalid_special_rule' });
+        }
+        if (cardFields.ruleKind === 'dice_multiplier' && !cardFields.ruleData.multipliersByOwned.length) {
+          return send(res, 400, { ok: false, error: 'invalid_special_rule' });
+        }
 
-        stmts.updatePropertyDetails.run(name, price, buildUnitCost, buildCost, JSON.stringify(rents), prop.id);
+        stmts.updatePropertyDetails.run(
+          name,
+          price,
+          buildUnitCost,
+          buildCost,
+          JSON.stringify(rents),
+          cardFields.cardType,
+          cardFields.groupKey,
+          cardFields.ruleKind,
+          JSON.stringify(cardFields.ruleData),
+          prop.id
+        );
         addLog(room.id, {
           type: 'transfer',
           text: `${player.name} 修改了「${prop.name}」的地产信息`,
@@ -1693,10 +1855,14 @@ wss.on('connection', (ws, req) => {
     return;
   }
 
+  const playerJoined = identity.role === 'player' && markPlayerJoined(roomId, identity.player.id);
+  const currentRoom = playerJoined ? getRoom(roomId) : room;
   wsJoinRoom(ws, roomId);
 
   // 立即推送当前房间状态
-  ws.send(JSON.stringify({ type: 'room_update', room: publicRoom(room) }));
+  const payload = { type: 'room_update', room: publicRoom(currentRoom) };
+  ws.send(JSON.stringify(payload));
+  if (playerJoined) broadcastRoom(roomId, payload);
 
   // 心跳：每 25s 发一次 ping，客户端回 pong
   const heartbeat = setInterval(() => {

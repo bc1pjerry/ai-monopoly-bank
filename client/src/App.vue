@@ -40,6 +40,7 @@
     <!-- 分享弹窗（庄家） -->
     <ShareModal
       v-if="shareVisible && allTokens"
+      :room="room"
       :roomId="roomId"
       :bankerToken="allTokens.bankerToken"
       :playerTokens="allTokens.playerTokens"
