@@ -1,8 +1,9 @@
 ![大富翁银行 banner](./docs/assets/readme-banner.png)
-![大富翁银行 poster](./docs/assets/poster-3-4.png)
-# 大富翁银行
 
+# 大富翁银行
 多人局域网大富翁银行，支持创建房间、扫码进入、庄家操作、玩家互转、改名等功能。
+
+![大富翁银行 poster](./docs/assets/poster-3-4.png)
 
 ## 变更日志
 
