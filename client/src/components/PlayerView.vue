@@ -7,6 +7,43 @@
       </div>
     </transition>
 
+    <!-- 地产报价全局弹窗 -->
+    <Transition name="property-sale-modal">
+      <div v-if="incomingPropertySales.length > 0" class="property-sale-modal-overlay">
+        <div class="property-sale-modal" role="dialog" aria-modal="true" aria-labelledby="property-sale-modal-title">
+          <div class="property-sale-modal-head">
+            <div>
+              <div class="property-sale-kicker">地产交易请求</div>
+              <h2 id="property-sale-modal-title">待确认报价</h2>
+            </div>
+            <span class="pending-sales-count">{{ incomingPropertySales.length }}</span>
+          </div>
+
+          <p class="property-sale-modal-desc">接受后会立即扣款并完成产权转移。</p>
+
+          <div class="property-sale-modal-list">
+            <div v-for="sale in incomingPropertySales" :key="sale.id" class="pending-sale-item">
+              <div class="pending-sale-main">
+                <div>
+                  <div class="pending-sale-name">{{ sale.propertyName }}</div>
+                  <div class="pending-sale-meta">{{ playerNameById(sale.sellerId) }} 向你出售</div>
+                </div>
+                <div class="pending-sale-price">¥{{ fmt(sale.amount) }}</div>
+              </div>
+              <div class="pending-sale-actions">
+                <button class="pending-sale-btn pending-sale-btn--ghost" @click="respondPropertySale(sale, false)" :disabled="Boolean(propertySaleDecisionLoading)">
+                  拒绝
+                </button>
+                <button class="pending-sale-btn pending-sale-btn--accept" @click="respondPropertySale(sale, true)" :disabled="Boolean(propertySaleDecisionLoading)">
+                  {{ propertySaleDecisionLoading === sale.id ? '处理中...' : '接受报价' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
     <!-- 顶部 hero -->
     <div class="hero">
       <div>
@@ -31,33 +68,6 @@
         <span class="my-assets-breakdown" v-if="myPropertyValue > 0">（含地产 ¥{{ fmt(myPropertyValue) }}）</span>
       </div>
     </div>
-
-    <section v-if="incomingPropertySales.length > 0" class="card pending-sales-card">
-      <div class="pending-sales-head">
-        <div>
-          <h2>待确认地产交易</h2>
-          <p class="muted">接受后才会扣款并完成产权转移。</p>
-        </div>
-        <span class="pending-sales-count">{{ incomingPropertySales.length }}</span>
-      </div>
-      <div class="pending-sales-list">
-        <div v-for="sale in incomingPropertySales" :key="sale.id" class="pending-sale-item">
-          <div class="pending-sale-main">
-            <div class="pending-sale-name">{{ sale.propertyName }}</div>
-            <div class="pending-sale-meta">{{ playerNameById(sale.sellerId) }} 向你出售</div>
-          </div>
-          <div class="pending-sale-price">¥{{ fmt(sale.amount) }}</div>
-          <div class="pending-sale-actions">
-            <button class="pending-sale-btn pending-sale-btn--ghost" @click="respondPropertySale(sale, false)" :disabled="propertySaleDecisionLoading === sale.id">
-              拒绝
-            </button>
-            <button class="pending-sale-btn pending-sale-btn--accept" @click="respondPropertySale(sale, true)" :disabled="propertySaleDecisionLoading === sale.id">
-              {{ propertySaleDecisionLoading === sale.id ? '处理中…' : '接受' }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </section>
 
     <!-- 页面主内容区 -->
     <div class="page-content">
@@ -3399,21 +3409,63 @@ async function submitRepay(loan) {
   flex-shrink: 0;
 }
 
-.pending-sales-card {
-  margin-top: 16px;
+.property-sale-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10020;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(3, 7, 18, .72);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  overscroll-behavior: contain;
 }
-.pending-sales-head {
+.property-sale-modal {
+  width: min(94vw, 460px);
+  max-height: min(86vh, 680px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 20px;
+  border-radius: 22px;
+  background: linear-gradient(160deg, #0f172a 0%, #111827 56%, #172554 100%);
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow: 0 24px 80px rgba(0,0,0,.46);
+}
+.property-sale-modal-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 6px;
 }
-.pending-sales-head h2 {
-  margin: 0 0 4px;
+.property-sale-kicker {
+  margin-bottom: 5px;
+  color: #6ee7b7;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .08em;
 }
-.pending-sales-head .muted {
+.property-sale-modal-head h2 {
   margin: 0;
+  color: #f8fafc;
+  font-size: 24px;
+}
+.property-sale-modal-desc {
+  margin: 0 0 16px;
+  color: #94a3b8;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.property-sale-modal-list {
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 .pending-sales-count {
   min-width: 28px;
@@ -3427,11 +3479,6 @@ async function submitRepay(loan) {
   color: #6ee7b7;
   font-size: 13px;
   font-weight: 800;
-}
-.pending-sales-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 .pending-sale-item {
   padding: 14px;
@@ -3461,6 +3508,11 @@ async function submitRepay(loan) {
   font-weight: 900;
   color: #86efac;
 }
+.property-sale-modal .pending-sale-price {
+  margin-top: 0;
+  text-align: right;
+  flex-shrink: 0;
+}
 .pending-sale-actions {
   display: flex;
   gap: 10px;
@@ -3484,6 +3536,46 @@ async function submitRepay(loan) {
 }
 .pending-sale-btn:disabled {
   opacity: .5;
+}
+.property-sale-modal-enter-active,
+.property-sale-modal-leave-active {
+  transition: opacity .18s ease;
+}
+.property-sale-modal-enter-active .property-sale-modal,
+.property-sale-modal-leave-active .property-sale-modal {
+  transition: transform .18s ease, opacity .18s ease;
+}
+.property-sale-modal-enter-from,
+.property-sale-modal-leave-to {
+  opacity: 0;
+}
+.property-sale-modal-enter-from .property-sale-modal,
+.property-sale-modal-leave-to .property-sale-modal {
+  opacity: 0;
+  transform: translateY(12px) scale(.98);
+}
+
+@media (max-width: 460px) {
+  .property-sale-modal-overlay {
+    align-items: flex-end;
+    padding: 12px;
+  }
+
+  .property-sale-modal {
+    width: 100%;
+    max-height: 88vh;
+    border-radius: 20px;
+    padding: 18px;
+  }
+
+  .property-sale-modal .pending-sale-main {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .property-sale-modal .pending-sale-price {
+    text-align: left;
+  }
 }
 
 /* ── 操作行（返回 + 确认） ── */
