@@ -82,6 +82,19 @@
               <span>{{ cameraHint }}</span>
             </div>
 
+            <label v-if="cameraDevices.length > 1" class="camera-picker">
+              <span>镜头</span>
+              <select v-model="selectedCameraId" :disabled="isSwitchingCamera" @change="switchCamera">
+                <option
+                  v-for="camera in cameraDevices"
+                  :key="camera.deviceId"
+                  :value="camera.deviceId"
+                >
+                  {{ camera.label }}
+                </option>
+              </select>
+            </label>
+
             <div class="lock-meter" aria-hidden="true">
               <span :style="{ width: `${lockProgress}%` }"></span>
             </div>
@@ -258,6 +271,8 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref } from 'vue'
+import { buildDeedCameraConstraints, formatCameraLabel } from '../composables/cameraConstraints.js'
+import { getFocusReadiness, measureImageSharpness } from '../composables/deedImageQuality.js'
 
 const emit = defineEmits(['close', 'deed-confirmed'])
 
@@ -269,6 +284,7 @@ const MIN_SCORE_TO_LOCK = 0.52
 const MISS_FRAME_TOLERANCE = 4
 const CANDIDATE_EVALUATION_LIMIT = 6
 const CARD_ASPECT_RATIO = 1.58
+const FOCUS_SAMPLE_MAX_SIDE = 260
 
 const phase = ref('idle')
 const previewUrl = ref('')
@@ -277,12 +293,16 @@ const cameraHint = ref('正在打开摄像头…')
 const detectedQuad = ref(null)
 const stableFrames = ref(0)
 const isAutoCapturing = ref(false)
+const cameraDevices = ref([])
+const selectedCameraId = ref('')
+const isSwitchingCamera = ref(false)
 
 const videoRef = ref(null)
 const overlayRef = ref(null)
 
 const workCanvas = document.createElement('canvas')
 const fullCanvas = document.createElement('canvas')
+const focusCanvas = document.createElement('canvas')
 let stream = null
 let rafId = 0
 let lastDetectionAt = 0
@@ -316,37 +336,44 @@ async function startLiveScan() {
   clearError()
   resetDeed()
   phase.value = 'camera'
-  cameraHint.value = '正在打开摄像头…'
-  detectedQuad.value = null
-  stableFrames.value = 0
   isAutoCapturing.value = false
-  lastQuad = null
-  lastCandidate = null
-  missedFrames = 0
+  resetCameraLock('正在打开摄像头…')
 
   await nextTick()
+  await openCameraStream(selectedCameraId.value)
+}
+
+async function openCameraStream(deviceId = '') {
+  stopCamera()
+  resetCameraLock(isSwitchingCamera.value ? '正在切换镜头…' : '正在打开摄像头…')
 
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        focusMode: { ideal: 'continuous' }
-      },
-      audio: false
-    })
+    stream = await navigator.mediaDevices.getUserMedia(buildDeedCameraConstraints(deviceId))
     await tuneCameraTrack(stream)
   } catch (err) {
-    phase.value = 'error'
-    errorMsg.value = '浏览器未允许实时摄像头。可以改用“拍照识别”，或在 HTTPS/localhost 环境下打开实时扫描。'
-    return
+    if (!deviceId) {
+      phase.value = 'error'
+      errorMsg.value = '浏览器未允许实时摄像头。可以改用“拍照识别”，或在 HTTPS/localhost 环境下打开实时扫描。'
+      return
+    }
+
+    try {
+      selectedCameraId.value = ''
+      stream = await navigator.mediaDevices.getUserMedia(buildDeedCameraConstraints())
+      await tuneCameraTrack(stream)
+    } catch {
+      phase.value = 'error'
+      errorMsg.value = '无法打开所选摄像头。可以改用“拍照识别”，或在 HTTPS/localhost 环境下打开实时扫描。'
+      return
+    }
   }
 
   const video = videoRef.value
   if (!video) return
   video.srcObject = stream
   await waitForVideo(video)
+  syncSelectedCameraFromTrack(stream)
+  await refreshCameraDevices()
 
   try {
     await loadOpenCv()
@@ -359,6 +386,47 @@ async function startLiveScan() {
 
   drawOverlay()
   startDetectionLoop()
+}
+
+function resetCameraLock(hint = '将地契放入画面') {
+  cameraHint.value = hint
+  detectedQuad.value = null
+  stableFrames.value = 0
+  lastQuad = null
+  lastCandidate = null
+  missedFrames = 0
+}
+
+async function refreshCameraDevices() {
+  if (!navigator.mediaDevices?.enumerateDevices) return
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    cameraDevices.value = devices
+      .filter((device) => device.kind === 'videoinput')
+      .map((device, index) => ({
+        deviceId: device.deviceId,
+        label: formatCameraLabel(device, index)
+      }))
+  } catch {
+    cameraDevices.value = []
+  }
+}
+
+function syncSelectedCameraFromTrack(mediaStream) {
+  const [track] = mediaStream.getVideoTracks()
+  const deviceId = track?.getSettings?.().deviceId
+  if (deviceId) selectedCameraId.value = deviceId
+}
+
+async function switchCamera() {
+  if (phase.value !== 'camera' || isSwitchingCamera.value) return
+  clearError()
+  isSwitchingCamera.value = true
+  try {
+    await openCameraStream(selectedCameraId.value)
+  } finally {
+    isSwitchingCamera.value = false
+  }
 }
 
 function waitForVideo(video) {
@@ -464,6 +532,17 @@ function runDetection() {
   const smoothedCandidate = { ...candidate, quad }
   lastCandidate = smoothedCandidate
   detectedQuad.value = quad
+
+  const focus = measureQuadFocus(video, quad)
+  if (!focus.ready) {
+    stableFrames.value = Math.max(0, stableFrames.value - 1)
+    lastQuad = quad
+    cameraHint.value = focus.score < 0.2
+      ? '画面偏糊，稍微后退等待对焦'
+      : '画面还不够清晰，请保持稳定'
+    drawOverlay(quad, candidate.score)
+    return
+  }
 
   if (candidate.score >= MIN_SCORE_TO_LOCK && isSimilarQuad(quad, lastQuad, video, 0.055)) {
     stableFrames.value += 1
@@ -747,6 +826,20 @@ function scoreWarpedAppearance(video, quad) {
   const brightScore = clamp01((bright / total - 0.28) / 0.42)
   const colorScore = clamp01(edgeBandSaturated / 260) * 0.7 + clamp01(saturated / 900) * 0.3
   return clamp01(brightScore * 0.58 + colorScore * 0.42)
+}
+
+function measureQuadFocus(video, quad) {
+  const warped = warpVideoQuadCanvas(video, quad, 520)
+  if (!warped) return getFocusReadiness(0)
+
+  const scale = Math.min(1, FOCUS_SAMPLE_MAX_SIDE / Math.max(warped.width, warped.height))
+  focusCanvas.width = Math.max(1, Math.round(warped.width * scale))
+  focusCanvas.height = Math.max(1, Math.round(warped.height * scale))
+
+  const ctx = focusCanvas.getContext('2d', { willReadFrequently: true })
+  ctx.drawImage(warped, 0, 0, focusCanvas.width, focusCanvas.height)
+  const image = ctx.getImageData(0, 0, focusCanvas.width, focusCanvas.height)
+  return getFocusReadiness(measureImageSharpness(image.data, image.width, image.height))
 }
 
 function warpVideoQuad(video, quad, maxSide = 1400, quality = 0.86) {
@@ -1368,6 +1461,33 @@ onBeforeUnmount(() => {
 .status-dot--ready {
   background: #34d399;
   box-shadow: 0 0 10px rgba(52, 211, 153, .75);
+}
+.camera-picker {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 700;
+}
+.camera-picker span {
+  color: #94a3b8;
+}
+.camera-picker select {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 10px;
+  background: rgba(15,23,42,.92);
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0 34px 0 10px;
+}
+.camera-picker select:disabled {
+  opacity: .65;
 }
 .lock-meter {
   width: 100%;
